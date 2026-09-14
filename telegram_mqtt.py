@@ -64,7 +64,7 @@ MQTT_TOPIC_LED = "hamed/esp32/led"
 
 # آدرس عمومی سرویس Render
 # بعداً این مقدار را از Render به صورت دستی قرار بده
-RENDER_URL = "https://telegram-esp32-control.onrender.com""
+RENDER_URL = "https://telegram-esp32-control.onrender.com"
 
 PORT = int(os.getenv("PORT", "10000"))
 
