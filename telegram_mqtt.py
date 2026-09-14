@@ -1,11 +1,18 @@
 
-import asyncio
+import os
 import ssl
+import asyncio
+import logging
 
 import paho.mqtt.client as mqtt
+
+from flask import Flask, request, Response
+from asgiref.wsgi import WsgiToAsgi
+import uvicorn
+
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -13,45 +20,100 @@ from telegram.ext import (
 )
 
 # =========================================================
-# TELEGRAM
+# LOGGING
 # =========================================================
 
-# توکن رباتی که از BotFather گرفتی
-TELEGRAM_BOT_TOKEN = "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 
-# فعلاً 0 بگذار
-# بعداً Chat ID خودت را اینجا قرار می‌دهیم تا فقط خودت
-# بتوانی ESP32 را کنترل کنی.
-ALLOWED_CHAT_ID = 0
-
+logger = logging.getLogger(__name__)
 
 # =========================================================
-# MQTT - HiveMQ Cloud
+# ENVIRONMENT VARIABLES
 # =========================================================
 
-MQTT_HOST = "c8f63357997a47a8b37f0495aac24c7d.s1.eu.hivemq.cloud"
-MQTT_PORT = 8883
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-MQTT_USERNAME = "hamed_esp32"
-MQTT_PASSWORD = "Ha00102030meD@"
+ALLOWED_CHAT_ID = os.getenv("ALLOWED_CHAT_ID", "0")
 
-# همان Topic قبلی پروژه ESP32 تو
-MQTT_TOPIC_LED = "hamed/esp32/led"
+MQTT_HOST = os.getenv("MQTT_HOST")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "8883"))
 
+MQTT_USERNAME = os.getenv("MQTT_USERNAME")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
+
+MQTT_TOPIC_LED = os.getenv(
+    "MQTT_TOPIC_LED",
+    "hamed/esp32/led"
+)
+
+# Render automatically provides this
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+
+# Render automatically provides PORT
+PORT = int(os.getenv("PORT", "10000"))
+
+# Optional webhook secret
+WEBHOOK_SECRET = os.getenv(
+    "WEBHOOK_SECRET",
+    "telegram_esp32_secret"
+)
+
+# =========================================================
+# CHECK CONFIGURATION
+# =========================================================
+
+required_variables = {
+    "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
+    "MQTT_HOST": MQTT_HOST,
+    "MQTT_USERNAME": MQTT_USERNAME,
+    "MQTT_PASSWORD": MQTT_PASSWORD,
+}
+
+missing = [
+    name
+    for name, value in required_variables.items()
+    if not value
+]
+
+if missing:
+    raise RuntimeError(
+        "Missing environment variables: "
+        + ", ".join(missing)
+    )
+
+if not RENDER_EXTERNAL_URL:
+    raise RuntimeError(
+        "RENDER_EXTERNAL_URL is not available."
+    )
 
 # =========================================================
 # MQTT CALLBACKS
 # =========================================================
 
-def on_connect(client, userdata, flags, reason_code, properties):
+def on_connect(
+    client,
+    userdata,
+    flags,
+    reason_code,
+    properties
+):
     print("======================================")
     print("MQTT STATUS")
-    print(f"Connected to HiveMQ")
+    print("Connected to HiveMQ")
     print(f"Reason code: {reason_code}")
     print("======================================")
 
 
-def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
+def on_disconnect(
+    client,
+    userdata,
+    disconnect_flags,
+    reason_code,
+    properties
+):
     print("MQTT disconnected")
     print(f"Reason code: {reason_code}")
 
@@ -62,7 +124,7 @@ def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
 
 mqtt_client = mqtt.Client(
     mqtt.CallbackAPIVersion.VERSION2,
-    client_id="Telegram_ESP32_Controller"
+    client_id="Telegram_ESP32_Render"
 )
 
 mqtt_client.username_pw_set(
@@ -83,11 +145,15 @@ mqtt_client.on_disconnect = on_disconnect
 # CONNECT MQTT
 # =========================================================
 
-try:
-    print("Connecting to HiveMQ...")
-    mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+print("Connecting to HiveMQ...")
 
-    # برای حفظ اتصال MQTT
+try:
+    mqtt_client.connect(
+        MQTT_HOST,
+        MQTT_PORT,
+        keepalive=60
+    )
+
     mqtt_client.loop_start()
 
 except Exception as e:
@@ -96,7 +162,7 @@ except Exception as e:
 
 
 # =========================================================
-# CHECK TELEGRAM USER
+# SECURITY
 # =========================================================
 
 def is_allowed(update: Update) -> bool:
@@ -104,11 +170,10 @@ def is_allowed(update: Update) -> bool:
     if update.effective_chat is None:
         return False
 
-    chat_id = update.effective_chat.id
+    chat_id = str(update.effective_chat.id)
 
-    # اگر هنوز 0 باشد، همه کاربران موقتاً مجاز هستند
-    # فقط برای مرحله تست
-    if ALLOWED_CHAT_ID == 0:
+    # فقط برای تست اولیه
+    if ALLOWED_CHAT_ID == "0":
         return True
 
     return chat_id == ALLOWED_CHAT_ID
@@ -131,17 +196,16 @@ async def start_command(
     print(f"Telegram Chat ID: {chat_id}")
 
     await update.message.reply_text(
-        f"🤖 ESP32 Control Bot\n\n"
-        f"Chat ID:\n"
-        f"{chat_id}\n\n"
-        f"دستورهای قابل استفاده:\n"
-        f"led on\n"
-        f"led off"
+        "🤖 ESP32 Control Bot\n\n"
+        "دستورهای قابل استفاده:\n\n"
+        "led on\n"
+        "led off\n"
+        "status"
     )
 
 
 # =========================================================
-# HANDLE TEXT MESSAGE
+# TEXT MESSAGE
 # =========================================================
 
 async def handle_message(
@@ -154,14 +218,16 @@ async def handle_message(
 
     chat_id = update.effective_chat.id
 
+    text = update.message.text.strip().lower()
+
     print("--------------------------------------")
     print(f"Telegram Chat ID: {chat_id}")
-    print(f"Message: {update.message.text}")
+    print(f"Message: {text}")
     print("--------------------------------------")
 
-    # -----------------------------------------
+    # -----------------------------------------------------
     # Security
-    # -----------------------------------------
+    # -----------------------------------------------------
 
     if not is_allowed(update):
 
@@ -171,15 +237,9 @@ async def handle_message(
 
         return
 
-    # -----------------------------------------
-    # دریافت متن
-    # -----------------------------------------
-
-    text = update.message.text.strip().lower()
-
-    # -----------------------------------------
+    # -----------------------------------------------------
     # LED ON
-    # -----------------------------------------
+    # -----------------------------------------------------
 
     if text == "led on":
 
@@ -191,21 +251,26 @@ async def handle_message(
 
         if result.rc == mqtt.MQTT_ERR_SUCCESS:
 
+            print("MQTT -> ON")
+
             await update.message.reply_text(
                 "🟢 LED روشن شد"
             )
 
-            print("MQTT -> ON")
-
         else:
+
+            print(
+                "MQTT publish failed:",
+                result.rc
+            )
 
             await update.message.reply_text(
                 "❌ ارسال فرمان MQTT انجام نشد."
             )
 
-    # -----------------------------------------
+    # -----------------------------------------------------
     # LED OFF
-    # -----------------------------------------
+    # -----------------------------------------------------
 
     elif text == "led off":
 
@@ -217,21 +282,52 @@ async def handle_message(
 
         if result.rc == mqtt.MQTT_ERR_SUCCESS:
 
+            print("MQTT -> OFF")
+
             await update.message.reply_text(
                 "🔴 LED خاموش شد"
             )
 
-            print("MQTT -> OFF")
-
         else:
+
+            print(
+                "MQTT publish failed:",
+                result.rc
+            )
 
             await update.message.reply_text(
                 "❌ ارسال فرمان MQTT انجام نشد."
             )
 
-    # -----------------------------------------
-    # دستورات ناشناخته
-    # -----------------------------------------
+    # -----------------------------------------------------
+    # STATUS
+    # -----------------------------------------------------
+
+    elif text == "status":
+
+        try:
+
+            mqtt_status = (
+                "connected"
+                if mqtt_client.is_connected()
+                else "disconnected"
+            )
+
+            await update.message.reply_text(
+                f"🤖 ESP32 Control\n\n"
+                f"MQTT: {mqtt_status}\n"
+                f"Topic: {MQTT_TOPIC_LED}"
+            )
+
+        except Exception:
+
+            await update.message.reply_text(
+                "⚠️ دریافت وضعیت انجام نشد."
+            )
+
+    # -----------------------------------------------------
+    # INVALID COMMAND
+    # -----------------------------------------------------
 
     else:
 
@@ -239,7 +335,99 @@ async def handle_message(
             "❓ دستور نامعتبر است.\n\n"
             "دستورهای مجاز:\n"
             "led on\n"
-            "led off"
+            "led off\n"
+            "status"
+        )
+
+
+# =========================================================
+# FLASK APP
+# =========================================================
+
+flask_app = Flask(__name__)
+
+
+# =========================================================
+# HEALTH CHECK
+# =========================================================
+
+@flask_app.get("/")
+def home():
+
+    return Response(
+        "Telegram ESP32 Bot is running.",
+        status=200,
+        mimetype="text/plain"
+    )
+
+
+@flask_app.get("/health")
+def health():
+
+    return Response(
+        "OK",
+        status=200,
+        mimetype="text/plain"
+    )
+
+
+# =========================================================
+# TELEGRAM WEBHOOK
+# =========================================================
+
+telegram_app = None
+
+
+@flask_app.post("/telegram")
+async def telegram_webhook():
+
+    # امنیت Webhook
+    received_secret = request.headers.get(
+        "X-Telegram-Bot-Api-Secret-Token"
+    )
+
+    if received_secret != WEBHOOK_SECRET:
+
+        return Response(
+            "Unauthorized",
+            status=401
+        )
+
+    try:
+
+        data = request.get_json(
+            silent=True
+        )
+
+        if not data:
+
+            return Response(
+                "Bad Request",
+                status=400
+            )
+
+        update = Update.de_json(
+            data=data,
+            bot=telegram_app.bot
+        )
+
+        await telegram_app.update_queue.put(
+            update
+        )
+
+        return Response(
+            "OK",
+            status=200
+        )
+
+    except Exception as e:
+
+        print("Webhook processing error:")
+        print(e)
+
+        return Response(
+            "Error",
+            status=500
         )
 
 
@@ -247,39 +435,108 @@ async def handle_message(
 # MAIN
 # =========================================================
 
-def main():
+async def main():
+
+    global telegram_app
 
     print("")
     print("======================================")
-    print("     TELEGRAM ESP32 CONTROLLER")
+    print("   TELEGRAM ESP32 RENDER BOT")
     print("======================================")
-    print("Bot is starting...")
-    print("")
 
-    application = (
-        ApplicationBuilder()
+    # -----------------------------------------------------
+    # Telegram Application
+    # -----------------------------------------------------
+
+    telegram_app = (
+        Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
+        .updater(None)
         .build()
     )
 
-    # /start
-    application.add_handler(
-        CommandHandler("start", start_command)
+    # -----------------------------------------------------
+    # Handlers
+    # -----------------------------------------------------
+
+    telegram_app.add_handler(
+        CommandHandler(
+            "start",
+            start_command
+        )
     )
 
-    # متن معمولی
-    application.add_handler(
+    telegram_app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         )
     )
 
-    print("Telegram Bot is running...")
-    print("Press Ctrl+C to stop.")
+    # -----------------------------------------------------
+    # Initialize
+    # -----------------------------------------------------
+
+    await telegram_app.initialize()
+
+    await telegram_app.start()
+
+    # -----------------------------------------------------
+    # Webhook URL
+    # -----------------------------------------------------
+
+    webhook_url = (
+        RENDER_EXTERNAL_URL
+        + "/telegram"
+    )
+
+    print("")
+    print("Setting Telegram webhook...")
+    print(webhook_url)
+
+    await telegram_app.bot.set_webhook(
+        url=webhook_url,
+        secret_token=WEBHOOK_SECRET,
+        allowed_updates=Update.ALL_TYPES
+    )
+
+    print("")
+    print("Telegram webhook configured.")
+    print("Render URL:")
+    print(RENDER_EXTERNAL_URL)
+    print("")
+    print("Bot is ready.")
     print("")
 
-    application.run_polling()
+
+    # -----------------------------------------------------
+    # Run Flask through Uvicorn
+    # -----------------------------------------------------
+
+    asgi_app = WsgiToAsgi(
+        flask_app
+    )
+
+    config = uvicorn.Config(
+        asgi_app,
+        host="0.0.0.0",
+        port=PORT,
+        log_level="info"
+    )
+
+    server = uvicorn.Server(config)
+
+    try:
+
+        await server.serve()
+
+    finally:
+
+        await telegram_app.stop()
+        await telegram_app.shutdown()
+
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
 
 
 # =========================================================
@@ -287,21 +544,12 @@ def main():
 # =========================================================
 
 if __name__ == "__main__":
+
     try:
-        main()
+
+        asyncio.run(main())
 
     except KeyboardInterrupt:
 
-        print("")
-        print("Stopping program...")
-
-    finally:
-
-        try:
-            mqtt_client.loop_stop()
-            mqtt_client.disconnect()
-
-        except Exception:
-            pass
-
+        print("Bot stopped.")
 
