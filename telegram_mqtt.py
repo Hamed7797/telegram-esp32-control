@@ -1,13 +1,17 @@
 
 import os
 import ssl
-import asyncio
 import logging
 
 import paho.mqtt.client as mqtt
 
 from fastapi import FastAPI, Request, HTTPException
-from telegram import Update
+
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+)
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -35,11 +39,10 @@ logger = logging.getLogger(__name__)
 # TELEGRAM
 # =========================================================
 
-# توکن جدید BotFather را اینجا قرار بده
 TELEGRAM_BOT_TOKEN = "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
 
-# Chat ID خودت
-# فعلاً 0 یعنی همه کاربران برای تست مجاز هستند
+# فعلاً 0 یعنی همه کاربران مجاز هستند
+# بعداً Chat ID خودت را اینجا قرار بده
 ALLOWED_CHAT_ID = "0"
 
 
@@ -47,14 +50,12 @@ ALLOWED_CHAT_ID = "0"
 # HIVEMQ
 # =========================================================
 
-
 MQTT_HOST = "c8f63357997a47a8b37f0495aac24c7d.s1.eu.hivemq.cloud"
 MQTT_PORT = 8883
 
 MQTT_USERNAME = "hamed_esp32"
 MQTT_PASSWORD = "Ha00102030meD@"
 
-# همان Topic قبلی پروژه ESP32 تو
 MQTT_TOPIC_LED = "hamed/esp32/led"
 
 
@@ -62,8 +63,6 @@ MQTT_TOPIC_LED = "hamed/esp32/led"
 # RENDER
 # =========================================================
 
-# آدرس عمومی سرویس Render
-# بعداً این مقدار را از Render به صورت دستی قرار بده
 RENDER_URL = "https://telegram-esp32-control.onrender.com"
 
 PORT = int(os.getenv("PORT", "10000"))
@@ -81,6 +80,24 @@ telegram_app = None
 
 
 # =========================================================
+# REPLY KEYBOARD
+# =========================================================
+
+def create_main_keyboard():
+
+    keyboard = [
+        ["🟢 LED ON", "🔴 LED OFF"],
+        ["📊 STATUS"]
+    ]
+
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False
+    )
+
+
+# =========================================================
 # MQTT CALLBACK
 # =========================================================
 
@@ -91,6 +108,7 @@ def on_connect(
     reason_code,
     properties
 ):
+
     print("======================================")
     print("MQTT STATUS")
     print("Connected to HiveMQ")
@@ -105,6 +123,7 @@ def on_disconnect(
     reason_code,
     properties
 ):
+
     print("MQTT disconnected")
     print(f"Reason code: {reason_code}")
 
@@ -176,6 +195,78 @@ def is_allowed(update: Update) -> bool:
 
 
 # =========================================================
+# SEND LED COMMAND
+# =========================================================
+
+async def send_led_command(
+    update: Update,
+    command: str
+):
+
+    if not update.message:
+        return
+
+    if not mqtt_client.is_connected():
+
+        await update.message.reply_text(
+            "❌ اتصال MQTT برقرار نیست.",
+            reply_markup=create_main_keyboard()
+        )
+
+        return
+
+
+    result = mqtt_client.publish(
+        MQTT_TOPIC_LED,
+        command,
+        qos=1
+    )
+
+
+    if result.rc != mqtt.MQTT_ERR_SUCCESS:
+
+        print(
+            "MQTT publish failed:",
+            result.rc
+        )
+
+        await update.message.reply_text(
+            "❌ ارسال فرمان انجام نشد.",
+            reply_markup=create_main_keyboard()
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # ON
+    # -----------------------------------------------------
+
+    if command == "ON":
+
+        print("MQTT -> ON")
+
+        await update.message.reply_text(
+            "🟢 LED روشن شد",
+            reply_markup=create_main_keyboard()
+        )
+
+
+    # -----------------------------------------------------
+    # OFF
+    # -----------------------------------------------------
+
+    elif command == "OFF":
+
+        print("MQTT -> OFF")
+
+        await update.message.reply_text(
+            "🔴 LED خاموش شد",
+            reply_markup=create_main_keyboard()
+        )
+
+
+# =========================================================
 # /START
 # =========================================================
 
@@ -187,6 +278,9 @@ async def start_command(
     if not update.effective_chat:
         return
 
+    if not update.message:
+        return
+
     chat_id = update.effective_chat.id
 
     print("--------------------------------------")
@@ -194,12 +288,114 @@ async def start_command(
     print("Command: /start")
     print("--------------------------------------")
 
+
+    # -----------------------------------------------------
+    # SECURITY
+    # -----------------------------------------------------
+
+    if not is_allowed(update):
+
+        await update.message.reply_text(
+            "⛔ شما اجازه کنترل این دستگاه را ندارید."
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # MAIN MENU
+    # -----------------------------------------------------
+
     await update.message.reply_text(
         "🤖 ESP32 Control Bot\n\n"
-        "دستورهای قابل استفاده:\n\n"
-        "led on\n"
-        "led off\n"
-        "status"
+        "لطفاً یک گزینه را انتخاب کنید:",
+        reply_markup=create_main_keyboard()
+    )
+
+
+# =========================================================
+# /LED_ON
+# =========================================================
+
+async def led_on_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not is_allowed(update):
+
+        if update.message:
+            await update.message.reply_text(
+                "⛔ شما اجازه کنترل این دستگاه را ندارید."
+            )
+
+        return
+
+
+    await send_led_command(
+        update,
+        "ON"
+    )
+
+
+# =========================================================
+# /LED_OFF
+# =========================================================
+
+async def led_off_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not is_allowed(update):
+
+        if update.message:
+            await update.message.reply_text(
+                "⛔ شما اجازه کنترل این دستگاه را ندارید."
+            )
+
+        return
+
+
+    await send_led_command(
+        update,
+        "OFF"
+    )
+
+
+# =========================================================
+# /STATUS
+# =========================================================
+
+async def status_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not update.message:
+        return
+
+    if not is_allowed(update):
+
+        await update.message.reply_text(
+            "⛔ شما اجازه کنترل این دستگاه را ندارید."
+        )
+
+        return
+
+
+    mqtt_state = (
+        "🟢 Connected"
+        if mqtt_client.is_connected()
+        else "🔴 Disconnected"
+    )
+
+
+    await update.message.reply_text(
+        "🤖 ESP32 Control\n\n"
+        f"MQTT: {mqtt_state}\n"
+        f"Topic: {MQTT_TOPIC_LED}",
+        reply_markup=create_main_keyboard()
     )
 
 
@@ -218,9 +414,11 @@ async def handle_message(
     if not update.message:
         return
 
+
     chat_id = update.effective_chat.id
 
     text = update.message.text.strip().lower()
+
 
     print("--------------------------------------")
     print(f"Telegram Chat ID: {chat_id}")
@@ -247,40 +445,12 @@ async def handle_message(
     # LED ON
     # -----------------------------------------------------
 
-    if text == "led on":
+    if text == "led on" or text == "🟢 led on":
 
-        if not mqtt_client.is_connected():
-
-            await update.message.reply_text(
-                "❌ اتصال MQTT برقرار نیست."
-            )
-
-            return
-
-        result = mqtt_client.publish(
-            MQTT_TOPIC_LED,
-            "ON",
-            qos=1
+        await send_led_command(
+            update,
+            "ON"
         )
-
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-
-            print("MQTT -> ON")
-
-            await update.message.reply_text(
-                "🟢 LED روشن شد"
-            )
-
-        else:
-
-            print(
-                "MQTT publish failed:",
-                result.rc
-            )
-
-            await update.message.reply_text(
-                "❌ ارسال فرمان انجام نشد."
-            )
 
         return
 
@@ -289,40 +459,12 @@ async def handle_message(
     # LED OFF
     # -----------------------------------------------------
 
-    if text == "led off":
+    if text == "led off" or text == "🔴 led off":
 
-        if not mqtt_client.is_connected():
-
-            await update.message.reply_text(
-                "❌ اتصال MQTT برقرار نیست."
-            )
-
-            return
-
-        result = mqtt_client.publish(
-            MQTT_TOPIC_LED,
-            "OFF",
-            qos=1
+        await send_led_command(
+            update,
+            "OFF"
         )
-
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-
-            print("MQTT -> OFF")
-
-            await update.message.reply_text(
-                "🔴 LED خاموش شد"
-            )
-
-        else:
-
-            print(
-                "MQTT publish failed:",
-                result.rc
-            )
-
-            await update.message.reply_text(
-                "❌ ارسال فرمان انجام نشد."
-            )
 
         return
 
@@ -331,33 +473,33 @@ async def handle_message(
     # STATUS
     # -----------------------------------------------------
 
-    if text == "status":
+    if text == "status" or text == "📊 status":
 
         mqtt_state = (
-            "Connected"
+            "🟢 Connected"
             if mqtt_client.is_connected()
-            else "Disconnected"
+            else "🔴 Disconnected"
         )
+
 
         await update.message.reply_text(
             "🤖 ESP32 Control\n\n"
             f"MQTT: {mqtt_state}\n"
-            f"Topic: {MQTT_TOPIC_LED}"
+            f"Topic: {MQTT_TOPIC_LED}",
+            reply_markup=create_main_keyboard()
         )
 
         return
 
 
     # -----------------------------------------------------
-    # INVALID
+    # UNKNOWN COMMAND
     # -----------------------------------------------------
 
     await update.message.reply_text(
         "❓ دستور نامعتبر است.\n\n"
-        "دستورهای مجاز:\n"
-        "led on\n"
-        "led off\n"
-        "status"
+        "لطفاً یکی از گزینه‌های زیر را انتخاب کنید.",
+        reply_markup=create_main_keyboard()
     )
 
 
@@ -387,11 +529,14 @@ async def health():
 # =========================================================
 
 @app.post("/telegram")
-async def telegram_webhook(request: Request):
+async def telegram_webhook(
+    request: Request
+):
 
     received_secret = request.headers.get(
         "X-Telegram-Bot-Api-Secret-Token"
     )
+
 
     if received_secret != WEBHOOK_SECRET:
 
@@ -407,18 +552,22 @@ async def telegram_webhook(request: Request):
 
         data = await request.json()
 
+
         update = Update.de_json(
             data,
             telegram_app.bot
         )
 
+
         await telegram_app.update_queue.put(
             update
         )
 
+
         return {
             "ok": True
         }
+
 
     except Exception as e:
 
@@ -440,15 +589,24 @@ async def startup_event():
 
     global telegram_app
 
+
     print("")
     print("======================================")
     print("     TELEGRAM ESP32 RENDER BOT")
     print("======================================")
 
+
+    # -----------------------------------------------------
     # MQTT
+    # -----------------------------------------------------
+
     connect_mqtt()
 
+
+    # -----------------------------------------------------
     # Telegram Application
+    # -----------------------------------------------------
+
     telegram_app = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
@@ -456,13 +614,46 @@ async def startup_event():
         .build()
     )
 
-    # Handlers
+
+    # -----------------------------------------------------
+    # COMMAND HANDLERS
+    # -----------------------------------------------------
+
     telegram_app.add_handler(
         CommandHandler(
             "start",
             start_command
         )
     )
+
+
+    telegram_app.add_handler(
+        CommandHandler(
+            "led_on",
+            led_on_command
+        )
+    )
+
+
+    telegram_app.add_handler(
+        CommandHandler(
+            "led_off",
+            led_off_command
+        )
+    )
+
+
+    telegram_app.add_handler(
+        CommandHandler(
+            "status",
+            status_command
+        )
+    )
+
+
+    # -----------------------------------------------------
+    # TEXT HANDLER
+    # -----------------------------------------------------
 
     telegram_app.add_handler(
         MessageHandler(
@@ -471,10 +662,15 @@ async def startup_event():
         )
     )
 
+
+    # -----------------------------------------------------
     # Initialize Telegram
+    # -----------------------------------------------------
+
     await telegram_app.initialize()
 
     await telegram_app.start()
+
 
     # -----------------------------------------------------
     # Set Telegram Webhook
@@ -482,15 +678,18 @@ async def startup_event():
 
     webhook_url = RENDER_URL + "/telegram"
 
+
     print("")
     print("Setting Telegram webhook...")
     print(webhook_url)
+
 
     await telegram_app.bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET,
         allowed_updates=Update.ALL_TYPES
     )
+
 
     print("")
     print("Telegram webhook configured.")
@@ -507,10 +706,12 @@ async def shutdown_event():
 
     print("Stopping bot...")
 
+
     if telegram_app:
 
         await telegram_app.stop()
         await telegram_app.shutdown()
+
 
     mqtt_client.loop_stop()
     mqtt_client.disconnect()
@@ -527,4 +728,3 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT
     )
-
