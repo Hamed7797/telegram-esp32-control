@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = (
     "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
+)
 
 # 0 = همه کاربران مجاز
 ALLOWED_CHAT_ID = "0"
