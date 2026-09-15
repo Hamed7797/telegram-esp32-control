@@ -61,8 +61,7 @@ MQTT_HOST = "c8f63357997a47a8b37f0495aac24c7d.s1.eu.hivemq.cloud"
 MQTT_PORT = 8883
 
 MQTT_USERNAME = "hamed_esp32"
-MQTT_PASSWORD = "Ha00102030meD@
-
+MQTT_PASSWORD = "Ha00102030meD@"
 
 # =========================================================
 # MQTT TOPIC
