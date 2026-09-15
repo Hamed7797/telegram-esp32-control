@@ -1,3 +1,4 @@
+
 import os
 import ssl
 import csv
@@ -15,7 +16,8 @@ from fastapi import FastAPI, Request, HTTPException
 
 from telegram import (
     Update,
-    ReplyKeyboardMarkup,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     ReplyKeyboardRemove,
 )
 
@@ -24,6 +26,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -46,16 +49,11 @@ logger = logging.getLogger(__name__)
 # TELEGRAM SETTINGS
 # =========================================================
 
-# =========================================================
-# مهم:
-# توکن جدید BotFather را اینجا قرار بده
-# =========================================================
-
 TELEGRAM_BOT_TOKEN = (
     "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
 )
 
-# 0 یعنی همه کاربران فعلاً مجاز هستند
+# 0 = همه کاربران مجاز
 ALLOWED_CHAT_ID = "0"
 
 
@@ -74,7 +72,6 @@ MQTT_PASSWORD = "Ha00102030meD@"
 # MQTT TOPIC
 # =========================================================
 
-# فقط همین یک Topic استفاده می‌شود
 MQTT_TOPIC = "hamed/esp32/led"
 
 
@@ -86,7 +83,7 @@ RENDER_URL = (
     "https://telegram-esp32-control.onrender.com"
 )
 
-# Render این مقدار را خودش تعیین می‌کند
+# Render خودش PORT را تعیین می‌کند
 PORT = int(
     os.getenv(
         "PORT",
@@ -103,7 +100,7 @@ WEBHOOK_SECRET = (
 # TIMEZONE
 # =========================================================
 
-# زمان گزارش‌ها بر اساس ایران
+# زمان ثبت گزارش‌ها
 LOCAL_TZ = ZoneInfo(
     "Asia/Tehran"
 )
@@ -116,7 +113,7 @@ def current_time():
 
 
 # =========================================================
-# DATALOGGER SETTINGS
+# DATALOGGER
 # =========================================================
 
 CSV_FILE = (
@@ -127,7 +124,7 @@ EXCEL_FILE = (
     "temperature_datalog.xlsx"
 )
 
-# ذخیره هر 60 ثانیه
+# یک رکورد هر 60 ثانیه
 DATALOG_INTERVAL = 60
 
 
@@ -157,48 +154,6 @@ waiting_for_interval = set()
 
 
 # =========================================================
-# TELEGRAM MAIN MENU
-# =========================================================
-
-def main_menu():
-
-    keyboard = [
-
-        [
-            "🟢 روشن کردن LED",
-            "🔴 خاموش کردن LED",
-        ],
-
-        [
-            "🌡️ دمای فعلی",
-        ],
-
-        [
-            "📊 دریافت دیتالاگر",
-        ],
-
-        [
-            "📡 گزارش مستمر دما",
-        ],
-
-        [
-            "⛔ توقف گزارش مستمر",
-        ],
-
-        [
-            "📊 وضعیت سیستم",
-        ],
-
-    ]
-
-    return ReplyKeyboardMarkup(
-        keyboard,
-        resize_keyboard=True,
-        is_persistent=True,
-    )
-
-
-# =========================================================
 # SECURITY
 # =========================================================
 
@@ -207,20 +162,14 @@ def is_allowed(
 ):
 
     if update.effective_chat is None:
-
         return False
-
 
     chat_id = str(
         update.effective_chat.id
     )
 
-
-    # برای تست همه مجاز هستند
     if ALLOWED_CHAT_ID == "0":
-
         return True
-
 
     return (
         chat_id == ALLOWED_CHAT_ID
@@ -228,7 +177,182 @@ def is_allowed(
 
 
 # =========================================================
-# CSV INITIALIZATION
+# INLINE MAIN MENU
+# =========================================================
+
+def main_menu():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "🟢 روشن کردن LED",
+                callback_data="led_on"
+            ),
+
+            InlineKeyboardButton(
+                "🔴 خاموش کردن LED",
+                callback_data="led_off"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🌡️ دمای فعلی",
+                callback_data="temperature"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "📊 دیتالاگر",
+                callback_data="datalogger"
+            ),
+
+            InlineKeyboardButton(
+                "📡 گزارش مستمر",
+                callback_data="continuous"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "📊 وضعیت سیستم",
+                callback_data="status"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "❌ بستن منو",
+                callback_data="close"
+            ),
+        ],
+    ]
+
+    return InlineKeyboardMarkup(
+        keyboard
+    )
+
+
+# =========================================================
+# BACK BUTTON
+# =========================================================
+
+def back_menu():
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🔙 بازگشت به منوی اصلی",
+                callback_data="home"
+            ),
+        ],
+    ]
+
+    return InlineKeyboardMarkup(
+        keyboard
+    )
+
+
+# =========================================================
+# DATALOGGER MENU
+# =========================================================
+
+def datalogger_menu():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "📄 دریافت فایل Excel",
+                callback_data="send_datalogger"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🔙 بازگشت",
+                callback_data="home"
+            ),
+        ],
+
+    ]
+
+    return InlineKeyboardMarkup(
+        keyboard
+    )
+
+
+# =========================================================
+# CONTINUOUS MENU
+# =========================================================
+
+def continuous_menu():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "⚡ 5 ثانیه",
+                callback_data="interval:5"
+            ),
+
+            InlineKeyboardButton(
+                "⚡ 10 ثانیه",
+                callback_data="interval:10"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "⏱️ 30 ثانیه",
+                callback_data="interval:30"
+            ),
+
+            InlineKeyboardButton(
+                "⏱️ 60 ثانیه",
+                callback_data="interval:60"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🕐 5 دقیقه",
+                callback_data="interval:300"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "✏️ زمان دلخواه",
+                callback_data="custom_interval"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "⛔ توقف گزارش",
+                callback_data="stop_continuous"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🔙 بازگشت",
+                callback_data="home"
+            ),
+        ],
+
+    ]
+
+    return InlineKeyboardMarkup(
+        keyboard
+    )
+
+
+# =========================================================
+# INITIALIZE CSV
 # =========================================================
 
 def initialize_csv():
@@ -236,9 +360,7 @@ def initialize_csv():
     if os.path.exists(
         CSV_FILE
     ):
-
         return
-
 
     try:
 
@@ -246,7 +368,7 @@ def initialize_csv():
             CSV_FILE,
             "w",
             newline="",
-            encoding="utf-8",
+            encoding="utf-8"
         ) as file:
 
             writer = csv.writer(
@@ -257,15 +379,13 @@ def initialize_csv():
                 [
                     "Date",
                     "Time",
-                    "Temperature_C",
+                    "Temperature_C"
                 ]
             )
-
 
         print(
             "CSV datalogger file created."
         )
-
 
     except Exception as e:
 
@@ -284,39 +404,32 @@ def create_excel():
 
     initialize_csv()
 
-
     try:
 
         rows = []
-
-
-        # -------------------------------------------------
-        # READ CSV
-        # -------------------------------------------------
 
         with open(
             CSV_FILE,
             "r",
             newline="",
-            encoding="utf-8",
+            encoding="utf-8"
         ) as file:
 
             reader = csv.DictReader(
                 file
             )
 
-
             for item in reader:
 
                 try:
 
-                    date_text = (
-                        item["Date"]
-                    )
+                    date_text = item[
+                        "Date"
+                    ]
 
-                    time_text = (
-                        item["Time"]
-                    )
+                    time_text = item[
+                        "Time"
+                    ]
 
                     temperature = float(
                         item[
@@ -324,49 +437,35 @@ def create_excel():
                         ]
                     )
 
-
-                    local_dt = (
-                        datetime.strptime(
-                            (
-                                date_text
-                                + " "
-                                + time_text
-                            ),
-                            "%Y-%m-%d %H:%M:%S",
-                        )
+                    dt = datetime.strptime(
+                        f"{date_text} {time_text}",
+                        "%Y-%m-%d %H:%M:%S"
                     )
-
 
                     rows.append(
                         (
-                            local_dt,
-                            temperature,
+                            dt,
+                            temperature
                         )
                     )
-
 
                 except Exception:
 
                     continue
 
 
-        # -------------------------------------------------
-        # CREATE WORKBOOK
-        # -------------------------------------------------
-
         workbook = xlsxwriter.Workbook(
             EXCEL_FILE
         )
-
 
         worksheet = workbook.add_worksheet(
             "Temperature Log"
         )
 
 
-        # =================================================
+        # =====================================================
         # FORMATS
-        # =================================================
+        # =====================================================
 
         title_format = workbook.add_format(
             {
@@ -377,7 +476,6 @@ def create_excel():
             }
         )
 
-
         header_format = workbook.add_format(
             {
                 "bold": True,
@@ -387,14 +485,12 @@ def create_excel():
             }
         )
 
-
         date_format = workbook.add_format(
             {
                 "num_format": "yyyy-mm-dd",
                 "border": 1,
             }
         )
-
 
         time_format = workbook.add_format(
             {
@@ -403,14 +499,12 @@ def create_excel():
             }
         )
 
-
         temperature_format = workbook.add_format(
             {
                 "num_format": "0.00",
                 "border": 1,
             }
         )
-
 
         info_format = workbook.add_format(
             {
@@ -420,9 +514,9 @@ def create_excel():
         )
 
 
-        # =================================================
+        # =====================================================
         # TITLE
-        # =================================================
+        # =====================================================
 
         worksheet.merge_range(
             "A1:C1",
@@ -431,9 +525,9 @@ def create_excel():
         )
 
 
-        # =================================================
+        # =====================================================
         # HEADER
-        # =================================================
+        # =====================================================
 
         worksheet.write(
             "A3",
@@ -441,13 +535,11 @@ def create_excel():
             header_format
         )
 
-
         worksheet.write(
             "B3",
             "Time",
             header_format
         )
-
 
         worksheet.write(
             "C3",
@@ -456,15 +548,14 @@ def create_excel():
         )
 
 
-        # =================================================
+        # =====================================================
         # DATA
-        # =================================================
+        # =====================================================
 
         first_row = 3
 
-
         for index, (
-            local_dt,
+            dt,
             temperature
         ) in enumerate(rows):
 
@@ -473,26 +564,20 @@ def create_excel():
                 + index
             )
 
-
-            # Date
             worksheet.write_datetime(
                 excel_row,
                 0,
-                local_dt,
+                dt,
                 date_format
             )
 
-
-            # Time
             worksheet.write_datetime(
                 excel_row,
                 1,
-                local_dt,
+                dt,
                 time_format
             )
 
-
-            # Temperature
             worksheet.write_number(
                 excel_row,
                 2,
@@ -501,49 +586,44 @@ def create_excel():
             )
 
 
-        # =================================================
+        # =====================================================
         # COLUMN WIDTH
-        # =================================================
+        # =====================================================
 
         worksheet.set_column(
             "A:A",
             15
         )
 
-
         worksheet.set_column(
             "B:B",
             12
         )
-
 
         worksheet.set_column(
             "C:C",
             20
         )
 
-
         worksheet.set_column(
             "D:D",
             3
         )
 
-
         worksheet.set_column(
             "E:E",
-            20
+            18
         )
-
 
         worksheet.set_column(
             "F:F",
-            24
+            25
         )
 
 
-        # =================================================
+        # =====================================================
         # FREEZE
-        # =================================================
+        # =====================================================
 
         worksheet.freeze_panes(
             3,
@@ -551,17 +631,11 @@ def create_excel():
         )
 
 
-        # =================================================
-        # TABLE
-        # =================================================
+        # =====================================================
+        # TABLE + CHART
+        # =====================================================
 
-        # مهم:
-        # فقط وقتی حداقل یک رکورد داریم
-        # Table ساخته می‌شود.
-        #
-        # این قسمت Warning قبلی را برطرف می‌کند.
-        # =================================================
-
+        # فقط اگر واقعاً رکورد داریم
         if rows:
 
             last_row = (
@@ -572,15 +646,10 @@ def create_excel():
 
 
             worksheet.add_table(
-
                 first_row,
-
                 0,
-
                 last_row,
-
                 2,
-
                 {
                     "name":
                         "TemperatureData",
@@ -606,14 +675,13 @@ def create_excel():
             )
 
 
-            # =================================================
+            # -------------------------------------------------
             # CHART
-            # =================================================
+            # -------------------------------------------------
 
             chart = workbook.add_chart(
                 {
-                    "type":
-                        "line"
+                    "type": "line"
                 }
             )
 
@@ -664,7 +732,7 @@ def create_excel():
             chart.set_x_axis(
                 {
                     "name":
-                        "Time",
+                        "Time"
                 }
             )
 
@@ -672,7 +740,7 @@ def create_excel():
             chart.set_y_axis(
                 {
                     "name":
-                        "Temperature (°C)",
+                        "Temperature (°C)"
                 }
             )
 
@@ -702,9 +770,9 @@ def create_excel():
             )
 
 
-        # =================================================
-        # INFORMATION
-        # =================================================
+        # =====================================================
+        # REPORT INFO
+        # =====================================================
 
         now = current_time()
 
@@ -714,7 +782,6 @@ def create_excel():
             "Generated",
             info_format
         )
-
 
         worksheet.write(
             "F1",
@@ -730,7 +797,6 @@ def create_excel():
             info_format
         )
 
-
         worksheet.write(
             "F2",
             "Asia/Tehran"
@@ -743,23 +809,18 @@ def create_excel():
             info_format
         )
 
-
         worksheet.write(
             "F3",
             len(rows)
         )
 
 
-        # =================================================
-        # CLOSE
-        # =================================================
-
         workbook.close()
 
 
         print(
-            f"Excel updated. Samples: "
-            f"{len(rows)}"
+            f"Excel updated. "
+            f"Samples: {len(rows)}"
         )
 
 
@@ -791,13 +852,12 @@ def save_temperature(
             CSV_FILE,
             "a",
             newline="",
-            encoding="utf-8",
+            encoding="utf-8"
         ) as file:
 
             writer = csv.writer(
                 file
             )
-
 
             writer.writerow(
                 [
@@ -842,6 +902,7 @@ def save_temperature(
         )
 
 
+        # Excel بلافاصله به‌روز می‌شود
         create_excel()
 
 
@@ -855,7 +916,7 @@ def save_temperature(
 
 
 # =========================================================
-# MQTT CONNECT CALLBACK
+# MQTT CONNECT
 # =========================================================
 
 def on_connect(
@@ -863,7 +924,7 @@ def on_connect(
     userdata,
     flags,
     reason_code,
-    properties,
+    properties
 ):
 
     print()
@@ -922,7 +983,7 @@ def on_connect(
 
 
 # =========================================================
-# MQTT DISCONNECT CALLBACK
+# MQTT DISCONNECT
 # =========================================================
 
 def on_disconnect(
@@ -930,7 +991,7 @@ def on_disconnect(
     userdata,
     disconnect_flags,
     reason_code,
-    properties,
+    properties
 ):
 
     print()
@@ -945,7 +1006,7 @@ def on_disconnect(
 
 
 # =========================================================
-# SEND MQTT RESPONSE TO WAITING REQUEST
+# DELIVER TEMPERATURE
 # =========================================================
 
 def deliver_temperature(
@@ -974,13 +1035,13 @@ def deliver_temperature(
 
 
 # =========================================================
-# MQTT MESSAGE CALLBACK
+# MQTT MESSAGE
 # =========================================================
 
 def on_message(
     client,
     userdata,
-    message,
+    message
 ):
 
     global latest_temperature
@@ -997,7 +1058,6 @@ def on_message(
             )
             .strip()
         )
-
 
     except Exception as e:
 
@@ -1051,7 +1111,6 @@ def on_message(
                 temperature
             )
 
-
             latest_temperature_time = (
                 current_time()
             )
@@ -1076,7 +1135,7 @@ def on_message(
         except ValueError:
 
             print(
-                "Invalid temperature message:"
+                "Invalid temperature:"
             )
 
             print(
@@ -1094,7 +1153,7 @@ def on_message(
     if payload == "TEMP_ERROR":
 
         print(
-            "ESP32 reports DS18B20 error."
+            "DS18B20 error received."
         )
 
 
@@ -1112,34 +1171,30 @@ def on_message(
 # MQTT CLIENT
 # =========================================================
 
-# Client ID کاملاً یکتا
-client_id = (
-    "Telegram_Render_"
-    + uuid.uuid4().hex[:12]
-)
-
-
 mqtt_client = mqtt.Client(
     mqtt.CallbackAPIVersion.VERSION2,
-    client_id=client_id,
+    client_id=(
+        "Telegram_Render_"
+        + uuid.uuid4().hex[:12]
+    ),
 )
 
 
 mqtt_client.username_pw_set(
     MQTT_USERNAME,
-    MQTT_PASSWORD,
+    MQTT_PASSWORD
 )
 
 
 mqtt_client.tls_set(
     cert_reqs=ssl.CERT_REQUIRED,
-    tls_version=ssl.PROTOCOL_TLS_CLIENT,
+    tls_version=ssl.PROTOCOL_TLS_CLIENT
 )
 
 
 mqtt_client.reconnect_delay_set(
     min_delay=2,
-    max_delay=30,
+    max_delay=30
 )
 
 
@@ -1151,7 +1206,7 @@ mqtt_client.on_message = on_message
 
 
 # =========================================================
-# MQTT START
+# CONNECT MQTT
 # =========================================================
 
 def connect_mqtt():
@@ -1164,11 +1219,8 @@ def connect_mqtt():
     try:
 
         mqtt_client.connect_async(
-
             MQTT_HOST,
-
             MQTT_PORT,
-
             keepalive=60
         )
 
@@ -1208,7 +1260,6 @@ async def request_temperature():
         return None
 
 
-    # فقط یک درخواست دما در هر لحظه
     async with (
         temperature_request_lock
     ):
@@ -1218,19 +1269,13 @@ async def request_temperature():
         )
 
 
-        future = (
-            loop.create_future()
-        )
+        future = loop.create_future()
 
 
         pending_temperature_future = (
             future
         )
 
-
-        # -------------------------------------------------
-        # SEND GET_TEMP
-        # -------------------------------------------------
 
         result = mqtt_client.publish(
 
@@ -1251,7 +1296,6 @@ async def request_temperature():
 
             pending_temperature_future = None
 
-
             print(
                 "GET_TEMP publish failed:"
             )
@@ -1259,7 +1303,6 @@ async def request_temperature():
             print(
                 result.rc
             )
-
 
             return None
 
@@ -1269,17 +1312,11 @@ async def request_temperature():
         )
 
 
-        # -------------------------------------------------
-        # WAIT FOR ESP32
-        # -------------------------------------------------
-
         try:
 
             temperature = (
                 await asyncio.wait_for(
-
                     future,
-
                     timeout=10
                 )
             )
@@ -1348,18 +1385,10 @@ async def automatic_datalogger():
             )
 
 
-            # ---------------------------------------------
-            # GET FRESH TEMPERATURE
-            # ---------------------------------------------
-
             temperature = (
                 await request_temperature()
             )
 
-
-            # ---------------------------------------------
-            # SAVE
-            # ---------------------------------------------
 
             if temperature is not None:
 
@@ -1370,11 +1399,8 @@ async def automatic_datalogger():
             else:
 
                 print(
-                    "No fresh temperature received."
-                )
-
-                print(
-                    "Nothing saved."
+                    "No fresh temperature "
+                    "received."
                 )
 
 
@@ -1397,309 +1423,218 @@ async def automatic_datalogger():
 
 
 # =========================================================
-# LED ON
+# START MESSAGE
 # =========================================================
 
-async def led_on(
-    update: Update
+async def start_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
-    if not mqtt_client.is_connected():
+    if not update.effective_chat:
+        return
+
+    if not update.message:
+        return
+
+
+    if not is_allowed(update):
 
         await update.message.reply_text(
 
-            "❌ اتصال MQTT برقرار نیست.",
-
-            reply_markup=main_menu()
+            "⛔ شما اجازه استفاده از "
+            "این ربات را ندارید."
         )
 
         return
 
 
-    result = mqtt_client.publish(
-
-        MQTT_TOPIC,
-
-        "ON",
-
-        qos=1,
-
-        retain=False
-    )
-
-
-    if (
-        result.rc
-        == mqtt.MQTT_ERR_SUCCESS
-    ):
-
-        print(
-            "MQTT -> ON"
-        )
-
-
-        await update.message.reply_text(
-
-            "🟢 LED روشن شد",
-
-            reply_markup=main_menu()
-        )
-
-
-    else:
-
-        print(
-            "LED ON publish failed:"
-        )
-
-        print(
-            result.rc
-        )
-
-
-        await update.message.reply_text(
-
-            "❌ ارسال فرمان روشن کردن LED انجام نشد.",
-
-            reply_markup=main_menu()
-        )
-
-
-# =========================================================
-# LED OFF
-# =========================================================
-
-async def led_off(
-    update: Update
-):
-
-    if not mqtt_client.is_connected():
-
-        await update.message.reply_text(
-
-            "❌ اتصال MQTT برقرار نیست.",
-
-            reply_markup=main_menu()
-        )
-
-        return
-
-
-    result = mqtt_client.publish(
-
-        MQTT_TOPIC,
-
-        "OFF",
-
-        qos=1,
-
-        retain=False
-    )
-
-
-    if (
-        result.rc
-        == mqtt.MQTT_ERR_SUCCESS
-    ):
-
-        print(
-            "MQTT -> OFF"
-        )
-
-
-        await update.message.reply_text(
-
-            "🔴 LED خاموش شد",
-
-            reply_markup=main_menu()
-        )
-
-
-    else:
-
-        print(
-            "LED OFF publish failed:"
-        )
-
-        print(
-            result.rc
-        )
-
-
-        await update.message.reply_text(
-
-            "❌ ارسال فرمان خاموش کردن LED انجام نشد.",
-
-            reply_markup=main_menu()
-        )
-
-
-# =========================================================
-# SHOW CURRENT TEMPERATURE
-# =========================================================
-
-async def show_temperature(
-    update: Update
-):
-
+    # حذف Reply Keyboard قبلی اگر وجود داشته باشد
     await update.message.reply_text(
-
-        "⏳ در حال دریافت دمای جدید..."
+        "✅ منوی جدید فعال شد.",
+        reply_markup=ReplyKeyboardRemove()
     )
-
-
-    temperature = (
-        await request_temperature()
-    )
-
-
-    if temperature is None:
-
-        await update.message.reply_text(
-
-            "❌ دریافت دمای جدید "
-            "از ESP32 انجام نشد.",
-
-            reply_markup=main_menu()
-        )
-
-        return
 
 
     now = current_time()
 
 
+    mqtt_status = (
+        "🟢 متصل"
+        if mqtt_client.is_connected()
+        else "🔴 قطع"
+    )
+
+
+    if latest_temperature is None:
+
+        temp_status = (
+            "❌ هنوز دریافت نشده"
+        )
+
+    else:
+
+        temp_status = (
+            f"🌡️ "
+            f"{latest_temperature:.2f} °C"
+        )
+
+
+    if (
+        temperature_logger_task
+        and
+        not temperature_logger_task.done()
+    ):
+
+        datalogger_status = (
+            "🟢 فعال"
+        )
+
+    else:
+
+        datalogger_status = (
+            "🔴 غیرفعال"
+        )
+
+
+    continuous_status = (
+
+        "🟢 فعال"
+
+        if update.effective_chat.id
+        in continuous_tasks
+
+        else
+        "🔴 غیرفعال"
+    )
+
+
+    text = (
+
+        "🤖 ESP32 CONTROL BOT\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n"
+
+        "🕐 اطلاعات زمان\n\n"
+
+        f"📅 تاریخ: "
+        f"{now.strftime('%Y-%m-%d')}\n"
+
+        f"⏰ ساعت: "
+        f"{now.strftime('%H:%M:%S')}\n"
+
+        "🌍 منطقه زمانی: "
+        "Asia/Tehran\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n"
+
+        "📡 وضعیت سیستم\n\n"
+
+        f"MQTT: "
+        f"{mqtt_status}\n"
+
+        f"{temp_status}\n"
+
+        f"📊 دیتالاگر: "
+        f"{datalogger_status}\n"
+
+        f"📡 گزارش مستمر: "
+        f"{continuous_status}\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        "یک گزینه را انتخاب کنید:"
+    )
+
+
     await update.message.reply_text(
 
-        "🌡️ دمای فعلی ESP32\n\n"
-
-        f"🌡️ "
-        f"{temperature:.2f} °C\n\n"
-
-        f"🕐 "
-        f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-
-        "🌍 Asia/Tehran",
+        text,
 
         reply_markup=main_menu()
     )
 
 
 # =========================================================
-# SEND DATALOGGER FILE
+# CALLBACK HANDLER
 # =========================================================
 
-async def send_datalogger(
-    update: Update
+async def callback_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
-    try:
-
-        # Excel را قبل از ارسال به‌روز می‌کنیم
-        create_excel()
+    query = update.callback_query
 
 
-        if not os.path.exists(
-            EXCEL_FILE
-        ):
-
-            await update.message.reply_text(
-
-                "❌ فایل دیتالاگر وجود ندارد.",
-
-                reply_markup=main_menu()
-            )
-
-            return
+    if query is None:
+        return
 
 
-        file_size = os.path.getsize(
-            EXCEL_FILE
+    await query.answer()
+
+
+    if not is_allowed(update):
+
+        await query.answer(
+            "⛔ دسترسی ندارید.",
+            show_alert=True
         )
 
-
-        if file_size <= 0:
-
-            await update.message.reply_text(
-
-                "❌ فایل دیتالاگر خالی است.",
-
-                reply_markup=main_menu()
-            )
-
-            return
+        return
 
 
-        with open(
-            EXCEL_FILE,
-            "rb"
-        ) as file:
-
-            await update.message.reply_document(
-
-                document=file,
-
-                filename=(
-                    "temperature_datalog.xlsx"
-                ),
-
-                caption=(
-
-                    "📊 دیتالاگر دمای ESP32\n\n"
-
-                    "⏱️ ثبت خودکار هر 60 ثانیه\n"
-
-                    "🕐 زمان: Asia/Tehran\n"
-
-                    "📈 همراه با نمودار دما و زمان"
-                )
-            )
-
-
-        await update.message.reply_text(
-
-            "✅ فایل دیتالاگر ارسال شد.",
-
-            reply_markup=main_menu()
-        )
-
-
-    except Exception as e:
-
-        print(
-            "Datalogger send error:"
-        )
-
-        print(e)
-
-
-        await update.message.reply_text(
-
-            "❌ ارسال فایل دیتالاگر انجام نشد.",
-
-            reply_markup=main_menu()
-        )
-
-
-# =========================================================
-# START CONTINUOUS REPORT
-# =========================================================
-
-async def start_continuous_report(
-    update: Update
-):
+    data = query.data
 
     chat_id = (
-        update.effective_chat.id
+        query.from_user.id
     )
 
 
-    if chat_id in continuous_tasks:
+    print()
+    print(
+        "--------------------------------------"
+    )
 
-        await update.message.reply_text(
+    print(
+        f"Callback: {data}"
+    )
 
-            "📡 گزارش مستمر دما "
-            "از قبل فعال است.",
+    print(
+        f"Chat ID: {chat_id}"
+    )
+
+    print(
+        "--------------------------------------"
+    )
+
+
+    # =====================================================
+    # HOME
+    # =====================================================
+
+    if data == "home":
+
+        waiting_for_interval.discard(
+            chat_id
+        )
+
+
+        now = current_time()
+
+
+        await query.edit_message_text(
+
+            (
+                "🤖 ESP32 CONTROL BOT\n\n"
+
+                f"🕐 "
+                f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+
+                "🌍 Asia/Tehran\n\n"
+
+                "لطفاً یکی از گزینه‌ها را انتخاب کنید:"
+            ),
 
             reply_markup=main_menu()
         )
@@ -1707,79 +1642,583 @@ async def start_continuous_report(
         return
 
 
-    waiting_for_interval.add(
-        chat_id
-    )
+    # =====================================================
+    # CLOSE
+    # =====================================================
 
+    if data == "close":
 
-    await update.message.reply_text(
-
-        "📡 گزارش مستمر دما\n\n"
-
-        "هر چند ثانیه یک‌بار "
-        "دما ارسال شود؟\n\n"
-
-        "مثلاً:\n"
-        "5\n"
-        "10\n"
-        "30\n"
-        "60\n\n"
-
-        "فقط عدد را ارسال کنید.",
-
-        reply_markup=ReplyKeyboardRemove()
-    )
-
-
-# =========================================================
-# STOP CONTINUOUS REPORT
-# =========================================================
-
-async def stop_continuous_report(
-    update: Update
-):
-
-    chat_id = (
-        update.effective_chat.id
-    )
-
-
-    waiting_for_interval.discard(
-        chat_id
-    )
-
-
-    task = continuous_tasks.pop(
-        chat_id,
-        None
-    )
-
-
-    if task:
-
-        task.cancel()
-
-
-        await update.message.reply_text(
-
-            "⛔ گزارش مستمر دما متوقف شد.",
-
-            reply_markup=main_menu()
+        waiting_for_interval.discard(
+            chat_id
         )
 
 
-    else:
+        await query.edit_message_text(
 
-        await update.message.reply_text(
+            "✅ منو بسته شد.\n\n"
+            "برای باز کردن دوباره، "
+            "/start را ارسال کنید.",
 
-            "ℹ️ گزارش مستمر دما فعال نیست.",
+            reply_markup=None
+        )
 
-            reply_markup=main_menu()
+        return
+
+
+    # =====================================================
+    # LED ON
+    # =====================================================
+
+    if data == "led_on":
+
+        if not mqtt_client.is_connected():
+
+            await query.answer(
+                "❌ MQTT متصل نیست.",
+                show_alert=True
+            )
+
+            return
+
+
+        result = mqtt_client.publish(
+
+            MQTT_TOPIC,
+
+            "ON",
+
+            qos=1,
+
+            retain=False
         )
 
 
+        if (
+            result.rc
+            == mqtt.MQTT_ERR_SUCCESS
+        ):
+
+            await query.answer(
+                "🟢 LED روشن شد",
+                show_alert=True
+            )
+
+            await query.edit_message_text(
+
+                "🟢 LED روشن است\n\n"
+                "فرمان با موفقیت ارسال شد.",
+
+                reply_markup=main_menu()
+            )
+
+
+        else:
+
+            await query.answer(
+                "❌ ارسال فرمان انجام نشد.",
+                show_alert=True
+            )
+
+        return
+
+
+    # =====================================================
+    # LED OFF
+    # =====================================================
+
+    if data == "led_off":
+
+        if not mqtt_client.is_connected():
+
+            await query.answer(
+                "❌ MQTT متصل نیست.",
+                show_alert=True
+            )
+
+            return
+
+
+        result = mqtt_client.publish(
+
+            MQTT_TOPIC,
+
+            "OFF",
+
+            qos=1,
+
+            retain=False
+        )
+
+
+        if (
+            result.rc
+            == mqtt.MQTT_ERR_SUCCESS
+        ):
+
+            await query.answer(
+                "🔴 LED خاموش شد",
+                show_alert=True
+            )
+
+            await query.edit_message_text(
+
+                "🔴 LED خاموش است\n\n"
+                "فرمان با موفقیت ارسال شد.",
+
+                reply_markup=main_menu()
+            )
+
+
+        else:
+
+            await query.answer(
+                "❌ ارسال فرمان انجام نشد.",
+                show_alert=True
+            )
+
+        return
+
+
+    # =====================================================
+    # TEMPERATURE
+    # =====================================================
+
+    if data == "temperature":
+
+        await query.edit_message_text(
+
+            "⏳ در حال دریافت دمای جدید...\n\n"
+            "در حال ارتباط با ESP32",
+
+            reply_markup=back_menu()
+        )
+
+
+        temperature = (
+            await request_temperature()
+        )
+
+
+        if temperature is None:
+
+            await query.edit_message_text(
+
+                "❌ دریافت دمای جدید از ESP32 انجام نشد.\n\n"
+
+                "ESP32 و MQTT را بررسی کنید.",
+
+                reply_markup=back_menu()
+            )
+
+            return
+
+
+        now = current_time()
+
+
+        await query.edit_message_text(
+
+            "🌡️ دمای فعلی ESP32\n\n"
+
+            f"🌡️ "
+            f"{temperature:.2f} °C\n\n"
+
+            f"🕐 "
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+
+            "🌍 Asia/Tehran",
+
+            reply_markup=back_menu()
+        )
+
+        return
+
+
+    # =====================================================
+    # DATALOGGER
+    # =====================================================
+
+    if data == "datalogger":
+
+        sample_count = 0
+
+
+        if os.path.exists(
+            CSV_FILE
+        ):
+
+            try:
+
+                with open(
+                    CSV_FILE,
+                    "r",
+                    encoding="utf-8"
+                ) as file:
+
+                    sample_count = max(
+                        0,
+                        sum(
+                            1
+                            for _ in file
+                        ) - 1
+                    )
+
+            except Exception:
+
+                sample_count = 0
+
+
+        await query.edit_message_text(
+
+            "📊 دیتالاگر دما\n\n"
+
+            f"⏱️ ثبت خودکار: "
+            f"هر {DATALOG_INTERVAL} ثانیه\n"
+
+            f"📁 فایل: "
+            f"{EXCEL_FILE}\n"
+
+            f"📝 تعداد رکوردها: "
+            f"{sample_count}\n\n"
+
+            "از گزینه زیر فایل Excel را دریافت کنید.",
+
+            reply_markup=datalogger_menu()
+        )
+
+        return
+
+
+    # =====================================================
+    # SEND DATALOGGER
+    # =====================================================
+
+    if data == "send_datalogger":
+
+        await query.answer(
+            "⏳ در حال آماده‌سازی فایل..."
+        )
+
+
+        try:
+
+            create_excel()
+
+
+            if not os.path.exists(
+                EXCEL_FILE
+            ):
+
+                await query.message.reply_text(
+
+                    "❌ فایل دیتالاگر ساخته نشد.",
+
+                    reply_markup=main_menu()
+                )
+
+                return
+
+
+            with open(
+                EXCEL_FILE,
+                "rb"
+            ) as file:
+
+                await query.message.reply_document(
+
+                    document=file,
+
+                    filename=(
+                        "temperature_datalog.xlsx"
+                    ),
+
+                    caption=(
+
+                        "📊 دیتالاگر دمای ESP32\n\n"
+
+                        "⏱️ ثبت خودکار هر 60 ثانیه\n"
+
+                        "🕐 زمان: Asia/Tehran\n"
+
+                        "📈 شامل نمودار دما و زمان"
+                    )
+                )
+
+
+            await query.message.reply_text(
+
+                "✅ فایل دیتالاگر ارسال شد.",
+
+                reply_markup=main_menu()
+            )
+
+
+        except Exception as e:
+
+            print(
+                "Datalogger send error:"
+            )
+
+            print(e)
+
+
+            await query.message.reply_text(
+
+                "❌ ارسال فایل دیتالاگر انجام نشد.",
+
+                reply_markup=main_menu()
+            )
+
+        return
+
+
+    # =====================================================
+    # CONTINUOUS MENU
+    # =====================================================
+
+    if data == "continuous":
+
+        if chat_id in continuous_tasks:
+
+            await query.edit_message_text(
+
+                "📡 گزارش مستمر دما در حال اجراست.\n\n"
+
+                "می‌توانید آن را متوقف کنید یا "
+                "به منوی اصلی برگردید.",
+
+                reply_markup=continuous_menu()
+            )
+
+        else:
+
+            await query.edit_message_text(
+
+                "📡 گزارش مستمر دما\n\n"
+
+                "فاصله زمانی ارسال را انتخاب کنید:",
+
+                reply_markup=continuous_menu()
+            )
+
+        return
+
+
+    # =====================================================
+    # PREDEFINED INTERVAL
+    # =====================================================
+
+    if data.startswith(
+        "interval:"
+    ):
+
+        try:
+
+            interval = float(
+                data.split(
+                    ":",
+                    1
+                )[1]
+            )
+
+        except Exception:
+
+            await query.answer(
+                "❌ فاصله نامعتبر است.",
+                show_alert=True
+            )
+
+            return
+
+
+        old_task = continuous_tasks.pop(
+            chat_id,
+            None
+        )
+
+
+        if old_task:
+
+            old_task.cancel()
+
+
+        task = asyncio.create_task(
+
+            continuous_temperature_report(
+
+                chat_id,
+
+                interval
+            )
+        )
+
+
+        continuous_tasks[
+            chat_id
+        ] = task
+
+
+        await query.edit_message_text(
+
+            "✅ گزارش مستمر فعال شد.\n\n"
+
+            f"⏱️ فاصله ارسال: "
+            f"{interval:g} ثانیه\n\n"
+
+            "برای توقف یا برگشت از دکمه‌های زیر استفاده کنید.",
+
+            reply_markup=continuous_menu()
+        )
+
+        return
+
+
+    # =====================================================
+    # CUSTOM INTERVAL
+    # =====================================================
+
+    if data == "custom_interval":
+
+        waiting_for_interval.add(
+            chat_id
+        )
+
+
+        await query.edit_message_text(
+
+            "✏️ زمان دلخواه\n\n"
+
+            "لطفاً فاصله ارسال را بر حسب ثانیه "
+            "به‌صورت عدد ارسال کنید.\n\n"
+
+            "مثال:\n"
+            "15\n"
+            "45\n"
+            "120",
+
+            reply_markup=back_menu()
+        )
+
+        return
+
+
+    # =====================================================
+    # STOP CONTINUOUS
+    # =====================================================
+
+    if data == "stop_continuous":
+
+        waiting_for_interval.discard(
+            chat_id
+        )
+
+
+        task = continuous_tasks.pop(
+            chat_id,
+            None
+        )
+
+
+        if task:
+
+            task.cancel()
+
+
+            await query.edit_message_text(
+
+                "⛔ گزارش مستمر دما متوقف شد.",
+
+                reply_markup=main_menu()
+            )
+
+        else:
+
+            await query.edit_message_text(
+
+                "ℹ️ گزارش مستمر دما فعال نیست.",
+
+                reply_markup=main_menu()
+            )
+
+        return
+
+
+    # =====================================================
+    # STATUS
+    # =====================================================
+
+    if data == "status":
+
+        now = current_time()
+
+
+        mqtt_status = (
+            "🟢 متصل"
+            if mqtt_client.is_connected()
+            else "🔴 قطع"
+        )
+
+
+        if latest_temperature is None:
+
+            temp_status = (
+                "❌ دریافت نشده"
+            )
+
+        else:
+
+            temp_status = (
+                f"{latest_temperature:.2f} °C"
+            )
+
+
+        datalogger_status = (
+
+            "🟢 فعال"
+
+            if (
+                temperature_logger_task
+                and
+                not temperature_logger_task.done()
+            )
+
+            else
+            "🔴 غیرفعال"
+        )
+
+
+        await query.edit_message_text(
+
+            "📊 وضعیت سیستم\n\n"
+
+            f"📡 MQTT: "
+            f"{mqtt_status}\n"
+
+            f"🌡️ دما: "
+            f"{temp_status}\n"
+
+            f"📊 دیتالاگر: "
+            f"{datalogger_status}\n"
+
+            f"⏱️ ثبت خودکار: "
+            f"هر {DATALOG_INTERVAL} ثانیه\n\n"
+
+            f"🕐 زمان:\n"
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+
+            "🌍 Asia/Tehran\n\n"
+
+            f"📁 فایل:\n"
+            f"{EXCEL_FILE}",
+
+            reply_markup=back_menu()
+        )
+
+        return
+
+
 # =========================================================
-# CONTINUOUS TEMPERATURE REPORT
+# CONTINUOUS REPORT
 # =========================================================
 
 async def continuous_temperature_report(
@@ -1812,13 +2251,8 @@ async def continuous_temperature_report(
     try:
 
         while (
-            chat_id
-            in continuous_tasks
+            chat_id in continuous_tasks
         ):
-
-            # ---------------------------------------------
-            # GET FRESH TEMP
-            # ---------------------------------------------
 
             temperature = (
                 await request_temperature()
@@ -1832,15 +2266,27 @@ async def continuous_temperature_report(
                     chat_id=chat_id,
 
                     text=(
+
                         "⚠️ دریافت دمای جدید "
                         "از ESP32 انجام نشد."
                     )
                 )
 
-
             else:
 
                 now = current_time()
+
+
+                stop_keyboard = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "⛔ توقف گزارش",
+                                callback_data="stop_continuous"
+                            ),
+                        ]
+                    ]
+                )
 
 
                 await telegram_app.bot.send_message(
@@ -1859,7 +2305,9 @@ async def continuous_temperature_report(
 
                         f"⏱️ "
                         f"هر {interval:g} ثانیه"
-                    )
+                    ),
+
+                    reply_markup=stop_keyboard
                 )
 
 
@@ -1871,8 +2319,8 @@ async def continuous_temperature_report(
     except asyncio.CancelledError:
 
         print(
-            f"Continuous report stopped: "
-            f"{chat_id}"
+            f"Continuous report "
+            f"cancelled: {chat_id}"
         )
 
 
@@ -1894,287 +2342,6 @@ async def continuous_temperature_report(
 
 
 # =========================================================
-# STATUS
-# =========================================================
-
-async def show_status(
-    update: Update
-):
-
-    now = current_time()
-
-
-    mqtt_status = (
-
-        "🟢 Connected"
-
-        if mqtt_client.is_connected()
-
-        else "🔴 Disconnected"
-    )
-
-
-    if latest_temperature is None:
-
-        temperature_status = (
-            "❌ دریافت نشده"
-        )
-
-    else:
-
-        temperature_status = (
-            f"{latest_temperature:.2f} °C"
-        )
-
-
-    datalogger_status = (
-
-        "🟢 فعال"
-
-        if (
-            temperature_logger_task
-            and
-            not temperature_logger_task.done()
-        )
-
-        else
-        "🔴 غیرفعال"
-    )
-
-
-    continuous_status = (
-
-        "🟢 فعال"
-
-        if (
-            update.effective_chat.id
-            in continuous_tasks
-        )
-
-        else
-        "🔴 غیرفعال"
-    )
-
-
-    await update.message.reply_text(
-
-        "📊 وضعیت سیستم\n\n"
-
-        f"📡 MQTT: "
-        f"{mqtt_status}\n"
-
-        f"🌡️ دما: "
-        f"{temperature_status}\n"
-
-        f"📊 دیتالاگر: "
-        f"{datalogger_status}\n"
-
-        f"📡 گزارش مستمر: "
-        f"{continuous_status}\n\n"
-
-        f"📁 فایل:\n"
-        f"{EXCEL_FILE}\n\n"
-
-        f"⏱️ ثبت خودکار: "
-        f"هر {DATALOG_INTERVAL} ثانیه\n"
-
-        f"🕐 زمان محلی:\n"
-        f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-
-        "🌍 Timezone: Asia/Tehran",
-
-        reply_markup=main_menu()
-    )
-
-
-# =========================================================
-# START COMMAND
-# =========================================================
-
-async def start_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not update.effective_chat:
-
-        return
-
-
-    if not update.message:
-
-        return
-
-
-    if not is_allowed(update):
-
-        await update.message.reply_text(
-
-            "⛔ شما اجازه استفاده از این ربات را ندارید."
-        )
-
-        return
-
-
-    chat_id = (
-        update.effective_chat.id
-    )
-
-
-    now = current_time()
-
-
-    # -----------------------------------------------------
-    # MQTT STATUS
-    # -----------------------------------------------------
-
-    mqtt_status = (
-
-        "🟢 Connected"
-
-        if mqtt_client.is_connected()
-
-        else "🔴 Disconnected"
-    )
-
-
-    # -----------------------------------------------------
-    # TEMPERATURE
-    # -----------------------------------------------------
-
-    if latest_temperature is None:
-
-        temperature_status = (
-            "❌ هنوز دریافت نشده"
-        )
-
-    else:
-
-        temperature_status = (
-            f"{latest_temperature:.2f} °C"
-        )
-
-
-    # -----------------------------------------------------
-    # DATALOGGER
-    # -----------------------------------------------------
-
-    datalogger_status = (
-
-        "🟢 فعال"
-
-        if (
-            temperature_logger_task
-            and
-            not temperature_logger_task.done()
-        )
-
-        else
-        "🔴 غیرفعال"
-    )
-
-
-    # -----------------------------------------------------
-    # CONTINUOUS
-    # -----------------------------------------------------
-
-    continuous_status = (
-
-        "🟢 فعال"
-
-        if chat_id in continuous_tasks
-
-        else
-        "🔴 غیرفعال"
-    )
-
-
-    # -----------------------------------------------------
-    # LOG
-    # -----------------------------------------------------
-
-    print()
-    print(
-        "======================================"
-    )
-
-    print(
-        f"Telegram Chat ID: "
-        f"{chat_id}"
-    )
-
-    print(
-        f"Start Time: "
-        f"{now.strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-
-    print(
-        "======================================"
-    )
-
-
-    # -----------------------------------------------------
-    # MESSAGE
-    # -----------------------------------------------------
-
-    start_message = (
-
-        "🤖 ESP32 CONTROL BOT\n\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n"
-
-        "🕐 اطلاعات زمان\n\n"
-
-        f"📅 تاریخ: "
-        f"{now.strftime('%Y-%m-%d')}\n"
-
-        f"⏰ ساعت: "
-        f"{now.strftime('%H:%M:%S')}\n"
-
-        "🌍 منطقه زمانی: "
-        "Asia/Tehran (Iran)\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n"
-
-        "📡 وضعیت سیستم\n\n"
-
-        f"MQTT: "
-        f"{mqtt_status}\n"
-
-        f"🌡️ دما: "
-        f"{temperature_status}\n"
-
-        f"📊 دیتالاگر: "
-        f"{datalogger_status}\n"
-
-        f"📡 گزارش مستمر: "
-        f"{continuous_status}\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n"
-
-        "📝 تنظیمات دیتالاگر\n\n"
-
-        f"⏱️ ثبت خودکار: "
-        f"هر {DATALOG_INTERVAL} ثانیه\n"
-
-        f"📁 فایل: "
-        f"{EXCEL_FILE}\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-
-        "لطفاً یک گزینه را انتخاب کنید:"
-    )
-
-
-    await update.message.reply_text(
-
-        start_message,
-
-        reply_markup=main_menu()
-    )
-
-
-# =========================================================
 # TEXT HANDLER
 # =========================================================
 
@@ -2184,12 +2351,9 @@ async def handle_message(
 ):
 
     if not update.effective_chat:
-
         return
 
-
     if not update.message:
-
         return
 
 
@@ -2197,7 +2361,8 @@ async def handle_message(
 
         await update.message.reply_text(
 
-            "⛔ شما اجازه استفاده از ربات را ندارید."
+            "⛔ شما اجازه استفاده "
+            "از این ربات را ندارید."
         )
 
         return
@@ -2232,23 +2397,7 @@ async def handle_message(
 
 
     # =====================================================
-    # STOP REPORT
-    # =====================================================
-
-    if text in (
-        "⛔ توقف گزارش مستمر",
-        "توقف گزارش مستمر",
-    ):
-
-        await stop_continuous_report(
-            update
-        )
-
-        return
-
-
-    # =====================================================
-    # INTERVAL INPUT
+    # CUSTOM INTERVAL INPUT
     # =====================================================
 
     if chat_id in waiting_for_interval:
@@ -2309,12 +2458,10 @@ async def handle_message(
 
             await update.message.reply_text(
 
-                "✅ گزارش مستمر دما فعال شد.\n\n"
+                "✅ گزارش مستمر فعال شد.\n\n"
 
-                f"⏱️ هر {interval:g} ثانیه\n\n"
-
-                "برای توقف:\n"
-                "⛔ توقف گزارش مستمر",
+                f"⏱️ فاصله: "
+                f"{interval:g} ثانیه",
 
                 reply_markup=main_menu()
             )
@@ -2324,11 +2471,10 @@ async def handle_message(
 
             await update.message.reply_text(
 
-                "❌ لطفاً فقط یک عدد معتبر وارد کنید.\n\n"
-                "مثلاً:\n"
-                "10\n"
-                "30\n"
-                "60"
+                "❌ لطفاً فقط یک عدد معتبر "
+                "بر حسب ثانیه ارسال کنید.\n\n"
+
+                "مثلاً: 10"
             )
 
 
@@ -2336,118 +2482,13 @@ async def handle_message(
 
 
     # =====================================================
-    # LED ON
-    # =====================================================
-
-    if text in (
-        "🟢 روشن کردن LED",
-        "led on",
-        "LED ON",
-    ):
-
-        await led_on(
-            update
-        )
-
-        return
-
-
-    # =====================================================
-    # LED OFF
-    # =====================================================
-
-    if text in (
-        "🔴 خاموش کردن LED",
-        "led off",
-        "LED OFF",
-    ):
-
-        await led_off(
-            update
-        )
-
-        return
-
-
-    # =====================================================
-    # CURRENT TEMPERATURE
-    # =====================================================
-
-    if text in (
-        "🌡️ دمای فعلی",
-        "دمای فعلی",
-        "دریافت دما",
-        "temperature",
-        "temp",
-    ):
-
-        await show_temperature(
-            update
-        )
-
-        return
-
-
-    # =====================================================
-    # DATALOGGER
-    # =====================================================
-
-    if text in (
-        "📊 دریافت دیتالاگر",
-        "📄 دریافت دیتالاگر",
-        "دریافت دیتالاگر",
-        "report",
-    ):
-
-        await send_datalogger(
-            update
-        )
-
-        return
-
-
-    # =====================================================
-    # CONTINUOUS REPORT
-    # =====================================================
-
-    if text in (
-        "📡 گزارش مستمر دما",
-        "گزارش مستمر دما",
-    ):
-
-        await start_continuous_report(
-            update
-        )
-
-        return
-
-
-    # =====================================================
-    # STATUS
-    # =====================================================
-
-    if text in (
-        "📊 وضعیت سیستم",
-        "وضعیت سیستم",
-        "📡 وضعیت سیستم",
-        "status",
-    ):
-
-        await show_status(
-            update
-        )
-
-        return
-
-
-    # =====================================================
-    # UNKNOWN
+    # FALLBACK
     # =====================================================
 
     await update.message.reply_text(
 
-        "❓ گزینه نامعتبر است.\n\n"
-        "لطفاً از منوی پایین استفاده کنید.",
+        "ℹ️ برای استفاده از ربات "
+        "دکمه /start را بزنید.",
 
         reply_markup=main_menu()
     )
@@ -2599,7 +2640,7 @@ async def startup_event():
 
 
     # =====================================================
-    # TELEGRAM APPLICATION
+    # TELEGRAM
     # =====================================================
 
     telegram_app = (
@@ -2617,7 +2658,7 @@ async def startup_event():
 
 
     # =====================================================
-    # HANDLERS
+    # COMMANDS
     # =====================================================
 
     telegram_app.add_handler(
@@ -2629,11 +2670,28 @@ async def startup_event():
     )
 
 
+    # =====================================================
+    # INLINE CALLBACKS
+    # =====================================================
+
+    telegram_app.add_handler(
+
+        CallbackQueryHandler(
+            callback_handler
+        )
+    )
+
+
+    # =====================================================
+    # TEXT
+    # =====================================================
+
     telegram_app.add_handler(
 
         MessageHandler(
 
-            filters.TEXT & ~filters.COMMAND,
+            filters.TEXT
+            & ~filters.COMMAND,
 
             handle_message
         )
@@ -2703,11 +2761,13 @@ async def startup_event():
         "Current local time:"
     )
 
+
     print(
         now.strftime(
             "%Y-%m-%d %H:%M:%S"
         )
     )
+
 
     print(
         "Timezone: Asia/Tehran"
@@ -2721,6 +2781,10 @@ async def startup_event():
 
     print(
         "Bot is ready."
+    )
+
+    print(
+        "Inline Keyboard: ACTIVE"
     )
 
     print(
@@ -2771,7 +2835,7 @@ async def shutdown_event():
 
 
     # =====================================================
-    # CONTINUOUS REPORTS
+    # CONTINUOUS TASKS
     # =====================================================
 
     for task in list(
@@ -2818,5 +2882,5 @@ if __name__ == "__main__":
 
         host="0.0.0.0",
 
-        port=PORT,
+        port=PORT
     )
