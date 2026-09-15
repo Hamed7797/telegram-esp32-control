@@ -1,4 +1,3 @@
-
 import os
 import ssl
 import csv
@@ -47,11 +46,9 @@ logger = logging.getLogger(__name__)
 # TELEGRAM
 # =========================================================
 
-TELEGRAM_BOT_TOKEN = (
-    "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
-)
+TELEGRAM_BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
 
-# فعلاً همه کاربران مجاز هستند
+# 0 = همه کاربران مجاز
 ALLOWED_CHAT_ID = "0"
 
 
@@ -68,14 +65,14 @@ MQTT_PORT = 8883
 
 MQTT_USERNAME = "hamed_esp32"
 
-MQTT_PASSWORD = "Ha00102030meD@"
+MQTT_PASSWORD = "PUT_YOUR_MQTT_PASSWORD_HERE"
 
 
 # =========================================================
 # MQTT TOPIC
 # =========================================================
 
-# همان Topic قبلی
+# همان Topic فعلی پروژه
 MQTT_TOPIC = "hamed/esp32/led"
 
 
@@ -87,7 +84,7 @@ RENDER_URL = (
     "https://telegram-esp32-control.onrender.com"
 )
 
-# Render مقدار PORT را خودش تعیین می‌کند
+# Render خودش PORT را می‌دهد
 PORT = int(
     os.getenv(
         "PORT",
@@ -95,9 +92,7 @@ PORT = int(
     )
 )
 
-WEBHOOK_SECRET = (
-    "HamedESP32_2026_X9"
-)
+WEBHOOK_SECRET = "HamedESP32_2026_X9"
 
 
 # =========================================================
@@ -116,7 +111,7 @@ def current_time():
 
 
 # =========================================================
-# DATALOGGER FILES
+# DATALOGGER
 # =========================================================
 
 CSV_FILE = (
@@ -127,12 +122,6 @@ EXCEL_FILE = (
     "temperature_datalog.xlsx"
 )
 
-
-# =========================================================
-# DATALOGGER SETTINGS
-# =========================================================
-
-# ثبت یک نمونه جدید هر 60 ثانیه
 DATALOG_INTERVAL = 60
 
 
@@ -162,34 +151,28 @@ waiting_for_interval = set()
 
 
 # =========================================================
-# TELEGRAM MAIN MENU
+# TELEGRAM MENU
 # =========================================================
 
 def main_menu():
 
     keyboard = [
-
         [
             "🟢 روشن کردن LED",
             "🔴 خاموش کردن LED",
         ],
-
         [
             "🌡️ دمای فعلی",
         ],
-
         [
-            "📊 دریافت دیتالاگر",
+            "📄 دریافت دیتالاگر",
         ],
-
         [
             "📡 گزارش مستمر دما",
         ],
-
         [
             "⛔ توقف گزارش مستمر",
         ],
-
         [
             "📊 وضعیت سیستم",
         ],
@@ -203,12 +186,14 @@ def main_menu():
 
 
 # =========================================================
-# CREATE CSV
+# CSV INITIALIZATION
 # =========================================================
 
 def initialize_csv():
 
-    if os.path.exists(CSV_FILE):
+    if os.path.exists(
+        CSV_FILE
+    ):
         return
 
     try:
@@ -231,13 +216,436 @@ def initialize_csv():
             )
 
         print(
-            "CSV datalogger file created."
+            "CSV file created."
         )
 
     except Exception as e:
 
         print(
             "CSV creation error:"
+        )
+
+        print(e)
+
+
+# =========================================================
+# CREATE EXCEL
+# =========================================================
+
+def create_excel():
+
+    initialize_csv()
+
+    try:
+
+        rows = []
+
+        with open(
+            CSV_FILE,
+            "r",
+            newline="",
+            encoding="utf-8",
+        ) as file:
+
+            reader = csv.DictReader(
+                file
+            )
+
+            for item in reader:
+
+                try:
+
+                    date_text = item[
+                        "Date"
+                    ]
+
+                    time_text = item[
+                        "Time"
+                    ]
+
+                    temperature = float(
+                        item[
+                            "Temperature_C"
+                        ]
+                    )
+
+                    dt = datetime.strptime(
+                        (
+                            date_text
+                            + " "
+                            + time_text
+                        ),
+                        "%Y-%m-%d %H:%M:%S",
+                    )
+
+                    rows.append(
+                        (
+                            dt,
+                            temperature,
+                        )
+                    )
+
+                except Exception:
+                    continue
+
+
+        workbook = xlsxwriter.Workbook(
+            EXCEL_FILE
+        )
+
+        worksheet = workbook.add_worksheet(
+            "Temperature Log"
+        )
+
+
+        # =====================================================
+        # FORMATS
+        # =====================================================
+
+        title_format = workbook.add_format(
+            {
+                "bold": True,
+                "font_size": 16,
+                "align": "center",
+                "valign": "vcenter",
+            }
+        )
+
+        header_format = workbook.add_format(
+            {
+                "bold": True,
+                "border": 1,
+                "align": "center",
+                "valign": "vcenter",
+            }
+        )
+
+        date_format = workbook.add_format(
+            {
+                "num_format": "yyyy-mm-dd",
+                "border": 1,
+            }
+        )
+
+        time_format = workbook.add_format(
+            {
+                "num_format": "hh:mm:ss",
+                "border": 1,
+            }
+        )
+
+        temperature_format = workbook.add_format(
+            {
+                "num_format": "0.00",
+                "border": 1,
+            }
+        )
+
+        info_format = workbook.add_format(
+            {
+                "bold": True,
+                "border": 1,
+            }
+        )
+
+
+        # =====================================================
+        # TITLE
+        # =====================================================
+
+        worksheet.merge_range(
+            "A1:C1",
+            "ESP32 Temperature Datalogger",
+            title_format,
+        )
+
+
+        # =====================================================
+        # HEADER
+        # =====================================================
+
+        worksheet.write(
+            "A3",
+            "Date",
+            header_format,
+        )
+
+        worksheet.write(
+            "B3",
+            "Time",
+            header_format,
+        )
+
+        worksheet.write(
+            "C3",
+            "Temperature (°C)",
+            header_format,
+        )
+
+
+        # =====================================================
+        # DATA
+        # =====================================================
+
+        first_row = 3
+
+        for index, (
+            dt,
+            temperature,
+        ) in enumerate(rows):
+
+            row = (
+                first_row
+                + index
+            )
+
+            worksheet.write_datetime(
+                row,
+                0,
+                dt,
+                date_format,
+            )
+
+            worksheet.write_datetime(
+                row,
+                1,
+                dt,
+                time_format,
+            )
+
+            worksheet.write_number(
+                row,
+                2,
+                temperature,
+                temperature_format,
+            )
+
+
+        # =====================================================
+        # COLUMN WIDTH
+        # =====================================================
+
+        worksheet.set_column(
+            "A:A",
+            15,
+        )
+
+        worksheet.set_column(
+            "B:B",
+            12,
+        )
+
+        worksheet.set_column(
+            "C:C",
+            20,
+        )
+
+        worksheet.set_column(
+            "E:E",
+            3,
+        )
+
+        worksheet.set_column(
+            "F:F",
+            18,
+        )
+
+        worksheet.set_column(
+            "G:G",
+            24,
+        )
+
+
+        # =====================================================
+        # FREEZE HEADER
+        # =====================================================
+
+        worksheet.freeze_panes(
+            3,
+            0,
+        )
+
+
+        # =====================================================
+        # TABLE + CHART
+        # =====================================================
+
+        if rows:
+
+            last_row = (
+                first_row
+                + len(rows)
+                - 1
+            )
+
+            worksheet.add_table(
+                first_row,
+                0,
+                last_row,
+                2,
+                {
+                    "name":
+                        "TemperatureData",
+
+                    "columns":
+                        [
+                            {
+                                "header":
+                                    "Date"
+                            },
+                            {
+                                "header":
+                                    "Time"
+                            },
+                            {
+                                "header":
+                                    "Temperature (°C)"
+                            },
+                        ],
+                },
+            )
+
+
+            chart = workbook.add_chart(
+                {
+                    "type": "line"
+                }
+            )
+
+
+            chart.add_series(
+                {
+                    "name":
+                        "Temperature",
+
+                    "categories":
+                        [
+                            "Temperature Log",
+                            first_row,
+                            1,
+                            last_row,
+                            1,
+                        ],
+
+                    "values":
+                        [
+                            "Temperature Log",
+                            first_row,
+                            2,
+                            last_row,
+                            2,
+                        ],
+
+                    "marker":
+                        {
+                            "type":
+                                "circle",
+                            "size":
+                                4,
+                        },
+                }
+            )
+
+
+            chart.set_title(
+                {
+                    "name":
+                        "Temperature vs Time"
+                }
+            )
+
+            chart.set_x_axis(
+                {
+                    "name":
+                        "Time"
+                }
+            )
+
+            chart.set_y_axis(
+                {
+                    "name":
+                        "Temperature (°C)"
+                }
+            )
+
+            chart.set_legend(
+                {
+                    "none":
+                        True
+                }
+            )
+
+            chart.set_size(
+                {
+                    "width":
+                        720,
+                    "height":
+                        420,
+                }
+            )
+
+
+            worksheet.insert_chart(
+                "E3",
+                chart,
+            )
+
+
+        # =====================================================
+        # REPORT INFO
+        # =====================================================
+
+        now = current_time()
+
+        worksheet.write(
+            "F1",
+            "Generated",
+            info_format,
+        )
+
+        worksheet.write(
+            "G1",
+            now.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+        )
+
+        worksheet.write(
+            "F2",
+            "Timezone",
+            info_format,
+        )
+
+        worksheet.write(
+            "G2",
+            "Asia/Tehran",
+        )
+
+        worksheet.write(
+            "F3",
+            "Samples",
+            info_format,
+        )
+
+        worksheet.write(
+            "G3",
+            len(rows),
+        )
+
+
+        workbook.close()
+
+
+        print(
+            f"Excel updated. "
+            f"Samples: {len(rows)}"
+        )
+
+
+    except Exception as e:
+
+        print(
+            "Excel creation error:"
         )
 
         print(e)
@@ -264,7 +672,9 @@ def save_temperature(
             encoding="utf-8",
         ) as file:
 
-            writer = csv.writer(file)
+            writer = csv.writer(
+                file
+            )
 
             writer.writerow(
                 [
@@ -322,440 +732,7 @@ def save_temperature(
 
 
 # =========================================================
-# CREATE EXCEL
-# =========================================================
-
-def create_excel():
-
-    initialize_csv()
-
-    try:
-
-        rows = []
-
-        with open(
-            CSV_FILE,
-            "r",
-            newline="",
-            encoding="utf-8",
-        ) as file:
-
-            reader = csv.DictReader(
-                file
-            )
-
-            for row in reader:
-
-                try:
-
-                    dt = datetime.strptime(
-                        (
-                            row["Date"]
-                            + " "
-                            + row["Time"]
-                        ),
-                        "%Y-%m-%d %H:%M:%S",
-                    )
-
-                    temperature = float(
-                        row["Temperature_C"]
-                    )
-
-                    rows.append(
-                        (
-                            dt,
-                            temperature
-                        )
-                    )
-
-                except Exception:
-                    continue
-
-
-        workbook = xlsxwriter.Workbook(
-            EXCEL_FILE
-        )
-
-        worksheet = workbook.add_worksheet(
-            "Temperature Log"
-        )
-
-
-        # =================================================
-        # FORMATS
-        # =================================================
-
-        title_format = workbook.add_format(
-            {
-                "bold": True,
-                "font_size": 16,
-                "align": "center",
-                "valign": "vcenter",
-            }
-        )
-
-
-        header_format = workbook.add_format(
-            {
-                "bold": True,
-                "border": 1,
-                "align": "center",
-                "valign": "vcenter",
-            }
-        )
-
-
-        date_format = workbook.add_format(
-            {
-                "num_format": "yyyy-mm-dd",
-                "border": 1,
-            }
-        )
-
-
-        time_format = workbook.add_format(
-            {
-                "num_format": "hh:mm:ss",
-                "border": 1,
-            }
-        )
-
-
-        temp_format = workbook.add_format(
-            {
-                "num_format": "0.00",
-                "border": 1,
-            }
-        )
-
-
-        info_format = workbook.add_format(
-            {
-                "bold": True,
-                "border": 1,
-            }
-        )
-
-
-        # =================================================
-        # TITLE
-        # =================================================
-
-        worksheet.merge_range(
-            "A1:C1",
-            "ESP32 Temperature Datalogger",
-            title_format
-        )
-
-
-        # =================================================
-        # HEADER
-        # =================================================
-
-        worksheet.write(
-            "A3",
-            "Date",
-            header_format
-        )
-
-        worksheet.write(
-            "B3",
-            "Time",
-            header_format
-        )
-
-        worksheet.write(
-            "C3",
-            "Temperature (°C)",
-            header_format
-        )
-
-
-        # =================================================
-        # DATA
-        # =================================================
-
-        first_row = 3
-
-        for index, (
-            dt,
-            temperature
-        ) in enumerate(rows):
-
-            row = (
-                first_row
-                + index
-            )
-
-            worksheet.write_datetime(
-                row,
-                0,
-                dt,
-                date_format
-            )
-
-            worksheet.write_datetime(
-                row,
-                1,
-                dt,
-                time_format
-            )
-
-            worksheet.write_number(
-                row,
-                2,
-                temperature,
-                temp_format
-            )
-
-
-        # =================================================
-        # COLUMN WIDTH
-        # =================================================
-
-        worksheet.set_column(
-            "A:A",
-            15
-        )
-
-        worksheet.set_column(
-            "B:B",
-            12
-        )
-
-        worksheet.set_column(
-            "C:C",
-            20
-        )
-
-        worksheet.set_column(
-            "E:E",
-            3
-        )
-
-        worksheet.set_column(
-            "F:F",
-            20
-        )
-
-        worksheet.set_column(
-            "G:G",
-            22
-        )
-
-
-        # =================================================
-        # FREEZE
-        # =================================================
-
-        worksheet.freeze_panes(
-            3,
-            0
-        )
-
-
-        # =================================================
-        # TABLE
-        # =================================================
-
-        if rows:
-
-            last_row = (
-                first_row
-                + len(rows)
-                - 1
-            )
-
-            worksheet.add_table(
-                first_row,
-                0,
-                last_row,
-                2,
-                {
-                    "name":
-                        "TemperatureData",
-
-                    "columns":
-                        [
-                            {
-                                "header":
-                                    "Date"
-                            },
-
-                            {
-                                "header":
-                                    "Time"
-                            },
-
-                            {
-                                "header":
-                                    "Temperature (°C)"
-                            },
-                        ],
-                }
-            )
-
-
-            # =================================================
-            # CHART
-            # =================================================
-
-            chart = workbook.add_chart(
-                {
-                    "type": "line"
-                }
-            )
-
-
-            chart.add_series(
-                {
-                    "name":
-                        "Temperature",
-
-                    "categories":
-                        [
-                            "Temperature Log",
-                            first_row,
-                            1,
-                            last_row,
-                            1,
-                        ],
-
-                    "values":
-                        [
-                            "Temperature Log",
-                            first_row,
-                            2,
-                            last_row,
-                            2,
-                        ],
-
-                    "marker":
-                        {
-                            "type":
-                                "circle",
-
-                            "size":
-                                4,
-                        },
-                }
-            )
-
-
-            chart.set_title(
-                {
-                    "name":
-                        "Temperature vs Time"
-                }
-            )
-
-
-            chart.set_x_axis(
-                {
-                    "name":
-                        "Time",
-                }
-            )
-
-
-            chart.set_y_axis(
-                {
-                    "name":
-                        "Temperature (°C)",
-                }
-            )
-
-
-            chart.set_legend(
-                {
-                    "none":
-                        True
-                }
-            )
-
-
-            chart.set_size(
-                {
-                    "width":
-                        720,
-
-                    "height":
-                        420,
-                }
-            )
-
-
-            worksheet.insert_chart(
-                "E3",
-                chart
-            )
-
-
-        # =================================================
-        # INFORMATION
-        # =================================================
-
-        now = current_time()
-
-
-        worksheet.write(
-            "F1",
-            "Generated",
-            info_format
-        )
-
-        worksheet.write(
-            "G1",
-            now.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-        )
-
-
-        worksheet.write(
-            "F2",
-            "Timezone",
-            info_format
-        )
-
-        worksheet.write(
-            "G2",
-            "Asia/Tehran"
-        )
-
-
-        worksheet.write(
-            "F3",
-            "Samples",
-            info_format
-        )
-
-        worksheet.write(
-            "G3",
-            len(rows)
-        )
-
-
-        workbook.close()
-
-
-        print(
-            f"Excel updated. Samples: "
-            f"{len(rows)}"
-        )
-
-
-    except Exception as e:
-
-        print(
-            "Excel creation error:"
-        )
-
-        print(e)
-
-
-# =========================================================
-# MQTT CONNECT CALLBACK
+# MQTT CONNECT
 # =========================================================
 
 def on_connect(
@@ -792,8 +769,9 @@ def on_connect(
 
         result = client.subscribe(
             MQTT_TOPIC,
-            qos=1
+            qos=1,
         )
+
 
         if (
             result[0]
@@ -805,16 +783,9 @@ def on_connect(
                 f"{MQTT_TOPIC}"
             )
 
-        else:
-
-            print(
-                f"Subscribe failed: "
-                f"{result}"
-            )
-
 
 # =========================================================
-# MQTT DISCONNECT CALLBACK
+# MQTT DISCONNECT
 # =========================================================
 
 def on_disconnect(
@@ -831,7 +802,8 @@ def on_disconnect(
     )
 
     print(
-        f"Reason code: {reason_code}"
+        f"Reason code: "
+        f"{reason_code}"
     )
 
 
@@ -850,7 +822,6 @@ def deliver_temperature(
         pending_temperature_future
     )
 
-
     pending_temperature_future = None
 
 
@@ -865,7 +836,7 @@ def deliver_temperature(
 
 
 # =========================================================
-# MQTT MESSAGE CALLBACK
+# MQTT MESSAGE
 # =========================================================
 
 def on_message(
@@ -884,18 +855,12 @@ def on_message(
             message.payload
             .decode(
                 "utf-8",
-                errors="ignore"
+                errors="ignore",
             )
             .strip()
         )
 
-    except Exception as e:
-
-        print(
-            "MQTT decode error:"
-        )
-
-        print(e)
+    except Exception:
 
         return
 
@@ -941,7 +906,6 @@ def on_message(
                 temperature
             )
 
-
             latest_temperature_time = (
                 current_time()
             )
@@ -956,17 +920,15 @@ def on_message(
             if main_loop:
 
                 main_loop.call_soon_threadsafe(
-
                     deliver_temperature,
-
-                    temperature
+                    temperature,
                 )
 
 
         except ValueError:
 
             print(
-                "Invalid temperature:"
+                "Invalid TEMP message:"
             )
 
             print(
@@ -978,7 +940,7 @@ def on_message(
 
 
     # =====================================================
-    # SENSOR ERROR
+    # TEMP ERROR
     # =====================================================
 
     if payload == "TEMP_ERROR":
@@ -987,7 +949,7 @@ def on_message(
 
             main_loop.call_soon_threadsafe(
                 deliver_temperature,
-                None
+                None,
             )
 
 
@@ -1033,7 +995,7 @@ mqtt_client.on_message = on_message
 
 
 # =========================================================
-# START MQTT
+# MQTT START
 # =========================================================
 
 def connect_mqtt():
@@ -1048,7 +1010,7 @@ def connect_mqtt():
         mqtt_client.connect_async(
             MQTT_HOST,
             MQTT_PORT,
-            keepalive=60
+            keepalive=60,
         )
 
         mqtt_client.loop_start()
@@ -1086,7 +1048,9 @@ async def request_temperature():
         return None
 
 
-    async with temperature_request_lock:
+    async with (
+        temperature_request_lock
+    ):
 
         loop = (
             asyncio.get_running_loop()
@@ -1111,7 +1075,7 @@ async def request_temperature():
 
             qos=1,
 
-            retain=False
+            retain=False,
         )
 
 
@@ -1140,12 +1104,15 @@ async def request_temperature():
 
         try:
 
-            return await asyncio.wait_for(
-
-                future,
-
-                timeout=10
+            temperature = (
+                await asyncio.wait_for(
+                    future,
+                    timeout=10,
+                )
             )
+
+
+            return temperature
 
 
         except asyncio.TimeoutError:
@@ -1225,10 +1192,6 @@ async def automatic_datalogger():
                     "No fresh temperature received."
                 )
 
-                print(
-                    "Nothing saved."
-                )
-
 
         except asyncio.CancelledError:
 
@@ -1249,7 +1212,7 @@ async def automatic_datalogger():
 
 
 # =========================================================
-# START COMMAND
+# START
 # =========================================================
 
 async def start_command(
@@ -1267,7 +1230,7 @@ async def start_command(
     if not is_allowed(update):
 
         await update.message.reply_text(
-            "⛔ شما اجازه استفاده از ربات را ندارید."
+            "⛔ شما اجازه استفاده از این ربات را ندارید."
         )
 
         return
@@ -1278,23 +1241,151 @@ async def start_command(
     )
 
 
+    now = current_time()
+
+
+    # -----------------------------------------------------
+    # MQTT STATUS
+    # -----------------------------------------------------
+
+    mqtt_status = (
+        "🟢 Connected"
+        if mqtt_client.is_connected()
+        else "🔴 Disconnected"
+    )
+
+
+    # -----------------------------------------------------
+    # TEMPERATURE
+    # -----------------------------------------------------
+
+    if latest_temperature is None:
+
+        temperature_status = (
+            "❌ هنوز دریافت نشده"
+        )
+
+    else:
+
+        temperature_status = (
+            f"🌡️ {latest_temperature:.2f} °C"
+        )
+
+
+    # -----------------------------------------------------
+    # DATALOGGER
+    # -----------------------------------------------------
+
+    datalogger_status = (
+
+        "🟢 فعال"
+
+        if (
+            temperature_logger_task
+            and
+            not temperature_logger_task.done()
+        )
+
+        else
+        "🔴 غیرفعال"
+    )
+
+
+    # -----------------------------------------------------
+    # CONTINUOUS
+    # -----------------------------------------------------
+
+    continuous_status = (
+
+        "🟢 فعال"
+
+        if chat_id in continuous_tasks
+
+        else
+        "🔴 غیرفعال"
+    )
+
+
+    print()
+    print(
+        "======================================"
+    )
+
     print(
         f"Telegram Chat ID: {chat_id}"
+    )
+
+    print(
+        f"Start Time: "
+        f"{now.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    print(
+        "======================================"
+    )
+
+
+    # -----------------------------------------------------
+    # START MESSAGE
+    # -----------------------------------------------------
+
+    message = (
+
+        "🤖 ESP32 CONTROL BOT\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n"
+
+        "🕐 اطلاعات زمان\n\n"
+
+        f"📅 تاریخ: "
+        f"{now.strftime('%Y-%m-%d')}\n"
+
+        f"⏰ ساعت: "
+        f"{now.strftime('%H:%M:%S')}\n"
+
+        "🌍 منطقه زمانی: "
+        "Asia/Tehran (Iran)\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n"
+
+        "📡 وضعیت سیستم\n\n"
+
+        f"MQTT: {mqtt_status}\n"
+
+        f"{temperature_status}\n"
+
+        f"📊 دیتالاگر: "
+        f"{datalogger_status}\n"
+
+        f"📡 گزارش مستمر: "
+        f"{continuous_status}\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n"
+
+        "📝 تنظیمات دیتالاگر\n\n"
+
+        f"⏱️ ثبت خودکار: "
+        f"هر {DATALOG_INTERVAL} ثانیه\n"
+
+        f"📁 فایل: "
+        f"{EXCEL_FILE}\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        "لطفاً یک گزینه را انتخاب کنید:"
     )
 
 
     await update.message.reply_text(
 
-        "🤖 ESP32 Control Bot\n\n"
-
-        "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+        message,
 
         reply_markup=main_menu()
     )
 
 
 # =========================================================
-# SHOW TEMPERATURE
+# SHOW CURRENT TEMPERATURE
 # =========================================================
 
 async def show_temperature(
@@ -1333,124 +1424,11 @@ async def show_temperature(
 
         f"🌡️ {temperature:.2f} °C\n\n"
 
-        f"🕐 {now.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"🕐 "
+        f"{now.strftime('%Y-%m-%d %H:%M:%S')}",
 
         reply_markup=main_menu()
     )
-
-
-# =========================================================
-# LED ON
-# =========================================================
-
-async def led_on(
-    update: Update
-):
-
-    if not mqtt_client.is_connected():
-
-        await update.message.reply_text(
-            "❌ اتصال MQTT برقرار نیست.",
-            reply_markup=main_menu()
-        )
-
-        return
-
-
-    result = mqtt_client.publish(
-
-        MQTT_TOPIC,
-
-        "ON",
-
-        qos=1,
-
-        retain=False
-    )
-
-
-    if (
-        result.rc
-        == mqtt.MQTT_ERR_SUCCESS
-    ):
-
-        print(
-            "MQTT -> ON"
-        )
-
-
-        await update.message.reply_text(
-
-            "🟢 LED روشن شد",
-
-            reply_markup=main_menu()
-        )
-
-    else:
-
-        await update.message.reply_text(
-
-            "❌ ارسال فرمان LED انجام نشد.",
-
-            reply_markup=main_menu()
-        )
-
-
-# =========================================================
-# LED OFF
-# =========================================================
-
-async def led_off(
-    update: Update
-):
-
-    if not mqtt_client.is_connected():
-
-        await update.message.reply_text(
-            "❌ اتصال MQTT برقرار نیست.",
-            reply_markup=main_menu()
-        )
-
-        return
-
-
-    result = mqtt_client.publish(
-
-        MQTT_TOPIC,
-
-        "OFF",
-
-        qos=1,
-
-        retain=False
-    )
-
-
-    if (
-        result.rc
-        == mqtt.MQTT_ERR_SUCCESS
-    ):
-
-        print(
-            "MQTT -> OFF"
-        )
-
-
-        await update.message.reply_text(
-
-            "🔴 LED خاموش شد",
-
-            reply_markup=main_menu()
-        )
-
-    else:
-
-        await update.message.reply_text(
-
-            "❌ ارسال فرمان LED انجام نشد.",
-
-            reply_markup=main_menu()
-        )
 
 
 # =========================================================
@@ -1463,7 +1441,6 @@ async def send_datalogger(
 
     try:
 
-        # آخرین داده‌ها را داخل Excel می‌سازیم
         create_excel()
 
 
@@ -1481,12 +1458,9 @@ async def send_datalogger(
             return
 
 
-        file_size = os.path.getsize(
+        if os.path.getsize(
             EXCEL_FILE
-        )
-
-
-        if file_size == 0:
+        ) == 0:
 
             await update.message.reply_text(
 
@@ -1519,14 +1493,14 @@ async def send_datalogger(
 
                     "🕐 زمان: Asia/Tehran\n"
 
-                    "📈 همراه با نمودار دما و زمان"
+                    "📈 شامل نمودار دما و زمان"
                 )
             )
 
 
         await update.message.reply_text(
 
-            "✅ فایل Excel ارسال شد.",
+            "✅ فایل دیتالاگر ارسال شد.",
 
             reply_markup=main_menu()
         )
@@ -1555,12 +1529,16 @@ async def send_datalogger(
 
 async def continuous_temperature_report(
     chat_id,
-    interval,
+    interval
 ):
 
     print()
     print(
-        f"CONTINUOUS REPORT STARTED"
+        "======================================"
+    )
+
+    print(
+        "CONTINUOUS REPORT STARTED"
     )
 
     print(
@@ -1569,6 +1547,10 @@ async def continuous_temperature_report(
 
     print(
         f"Interval: {interval} seconds"
+    )
+
+    print(
+        "======================================"
     )
 
 
@@ -1668,7 +1650,8 @@ async def start_continuous_report(
 
         await update.message.reply_text(
 
-            "📡 گزارش مستمر دما از قبل فعال است.",
+            "📡 گزارش مستمر دما "
+            "از قبل فعال است.",
 
             reply_markup=main_menu()
         )
@@ -1694,7 +1677,7 @@ async def start_continuous_report(
         "30\n"
         "60\n\n"
 
-        "فقط عدد را وارد کنید.",
+        "فقط عدد را ارسال کنید.",
 
         reply_markup=ReplyKeyboardRemove()
     )
@@ -1754,12 +1737,12 @@ async def show_status(
     update: Update
 ):
 
+    now = current_time()
+
+
     mqtt_status = (
-
         "🟢 Connected"
-
         if mqtt_client.is_connected()
-
         else "🔴 Disconnected"
     )
 
@@ -1777,20 +1760,31 @@ async def show_status(
         )
 
 
-    report_status = (
+    datalogger_status = (
 
         "🟢 فعال"
 
         if (
-            update.effective_chat.id
-            in continuous_tasks
+            temperature_logger_task
+            and
+            not temperature_logger_task.done()
         )
 
-        else "🔴 غیرفعال"
+        else
+        "🔴 غیرفعال"
     )
 
 
-    now = current_time()
+    continuous_status = (
+
+        "🟢 فعال"
+
+        if update.effective_chat.id
+        in continuous_tasks
+
+        else
+        "🔴 غیرفعال"
+    )
 
 
     await update.message.reply_text(
@@ -1801,16 +1795,16 @@ async def show_status(
 
         f"🌡️ دما: {temp_status}\n"
 
-        f"📡 گزارش مستمر: {report_status}\n\n"
+        f"📊 دیتالاگر: {datalogger_status}\n"
 
-        f"📁 فایل:\n"
-        f"{EXCEL_FILE}\n\n"
+        f"📡 گزارش مستمر: "
+        f"{continuous_status}\n\n"
 
         f"⏱️ ثبت خودکار: "
-        f"هر {DATALOG_INTERVAL} ثانیه\n\n"
+        f"هر {DATALOG_INTERVAL} ثانیه\n"
 
         f"🕐 زمان محلی:\n"
-        f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
 
         "🌍 Timezone: Asia/Tehran",
 
@@ -1837,7 +1831,9 @@ async def handle_message(
     if not is_allowed(update):
 
         await update.message.reply_text(
-            "⛔ شما اجازه استفاده از ربات را ندارید."
+
+            "⛔ شما اجازه استفاده از "
+            "این ربات را ندارید."
         )
 
         return
@@ -1846,6 +1842,7 @@ async def handle_message(
     chat_id = (
         update.effective_chat.id
     )
+
 
     text = (
         update.message.text.strip()
@@ -1887,7 +1884,7 @@ async def handle_message(
 
 
     # =====================================================
-    # WAITING FOR INTERVAL
+    # INTERVAL
     # =====================================================
 
     if chat_id in waiting_for_interval:
@@ -1901,19 +1898,15 @@ async def handle_message(
 
             if interval < 1:
 
-                await update.message.reply_text(
-
-                    "⚠️ حداقل فاصله 1 ثانیه است."
-                )
-
-                return
+                raise ValueError
 
 
             if interval > 86400:
 
                 await update.message.reply_text(
 
-                    "⚠️ حداکثر فاصله 86400 ثانیه است."
+                    "❌ حداکثر فاصله "
+                    "86400 ثانیه است."
                 )
 
                 return
@@ -1942,7 +1935,6 @@ async def handle_message(
                 continuous_temperature_report(
 
                     chat_id,
-
                     interval
                 )
             )
@@ -1955,7 +1947,7 @@ async def handle_message(
 
             await update.message.reply_text(
 
-                "✅ گزارش مستمر فعال شد.\n\n"
+                "✅ گزارش مستمر دما فعال شد.\n\n"
 
                 f"⏱️ هر {interval:g} ثانیه\n\n"
 
@@ -2037,6 +2029,7 @@ async def handle_message(
 
     if text in (
         "📊 دریافت دیتالاگر",
+        "📄 دریافت دیتالاگر",
         "دریافت دیتالاگر",
         "report",
     ):
@@ -2049,7 +2042,7 @@ async def handle_message(
 
 
     # =====================================================
-    # CONTINUOUS
+    # CONTINUOUS REPORT
     # =====================================================
 
     if text in (
@@ -2120,7 +2113,7 @@ async def health():
 
 
 # =========================================================
-# TELEGRAM WEBHOOK
+# WEBHOOK
 # =========================================================
 
 @app.post("/telegram")
@@ -2221,46 +2214,37 @@ async def startup_event():
     )
 
 
-    # =====================================================
-    # INITIALIZE FILES
-    # =====================================================
+    # -----------------------------------------------------
+    # Files
+    # -----------------------------------------------------
 
     initialize_csv()
 
     create_excel()
 
 
-    # =====================================================
+    # -----------------------------------------------------
     # MQTT
-    # =====================================================
+    # -----------------------------------------------------
 
     connect_mqtt()
 
 
-    # =====================================================
-    # TELEGRAM
-    # =====================================================
+    # -----------------------------------------------------
+    # Telegram
+    # -----------------------------------------------------
 
     telegram_app = (
-
         Application.builder()
-
         .token(
             TELEGRAM_BOT_TOKEN
         )
-
         .updater(None)
-
         .build()
     )
 
 
-    # =====================================================
-    # HANDLERS
-    # =====================================================
-
     telegram_app.add_handler(
-
         CommandHandler(
             "start",
             start_command
@@ -2269,7 +2253,6 @@ async def startup_event():
 
 
     telegram_app.add_handler(
-
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
@@ -2277,18 +2260,18 @@ async def startup_event():
     )
 
 
-    # =====================================================
-    # INITIALIZE
-    # =====================================================
+    # -----------------------------------------------------
+    # Initialize
+    # -----------------------------------------------------
 
     await telegram_app.initialize()
 
     await telegram_app.start()
 
 
-    # =====================================================
-    # DATALOGGER
-    # =====================================================
+    # -----------------------------------------------------
+    # Automatic Logger
+    # -----------------------------------------------------
 
     temperature_logger_task = (
         asyncio.create_task(
@@ -2297,9 +2280,9 @@ async def startup_event():
     )
 
 
-    # =====================================================
-    # WEBHOOK
-    # =====================================================
+    # -----------------------------------------------------
+    # Webhook
+    # -----------------------------------------------------
 
     webhook_url = (
         RENDER_URL
@@ -2327,9 +2310,9 @@ async def startup_event():
     )
 
 
-    # =====================================================
-    # DEBUG TIME
-    # =====================================================
+    # -----------------------------------------------------
+    # TIME CHECK
+    # -----------------------------------------------------
 
     now = current_time()
 
@@ -2387,9 +2370,9 @@ async def shutdown_event():
     )
 
 
-    # =====================================================
-    # DATALOGGER
-    # =====================================================
+    # -----------------------------------------------------
+    # Datalogger
+    # -----------------------------------------------------
 
     if temperature_logger_task:
 
@@ -2407,9 +2390,9 @@ async def shutdown_event():
         temperature_logger_task = None
 
 
-    # =====================================================
-    # CONTINUOUS REPORTS
-    # =====================================================
+    # -----------------------------------------------------
+    # Continuous Reports
+    # -----------------------------------------------------
 
     for task in list(
         continuous_tasks.values()
@@ -2423,9 +2406,9 @@ async def shutdown_event():
     waiting_for_interval.clear()
 
 
-    # =====================================================
-    # TELEGRAM
-    # =====================================================
+    # -----------------------------------------------------
+    # Telegram
+    # -----------------------------------------------------
 
     if telegram_app:
 
@@ -2434,9 +2417,9 @@ async def shutdown_event():
         await telegram_app.shutdown()
 
 
-    # =====================================================
+    # -----------------------------------------------------
     # MQTT
-    # =====================================================
+    # -----------------------------------------------------
 
     mqtt_client.loop_stop()
 
@@ -2450,11 +2433,7 @@ async def shutdown_event():
 if __name__ == "__main__":
 
     uvicorn.run(
-
         "telegram_mqtt:app",
-
         host="0.0.0.0",
-
         port=PORT,
     )
-
