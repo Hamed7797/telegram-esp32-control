@@ -2454,3 +2454,15 @@ async def shutdown_event():
 
     mqtt_client.disconnect()
 
+
+# =========================================================
+# MAIN
+# =========================================================
+
+if __name__ == "__main__":
+
+    uvicorn.run(
+        "telegram_mqtt:app",
+        host="0.0.0.0",
+        port=PORT,
+    )
