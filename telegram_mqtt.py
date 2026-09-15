@@ -1,7 +1,7 @@
 import os
 import ssl
-import asyncio
 import logging
+import time
 
 import paho.mqtt.client as mqtt
 
@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request, HTTPException
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
+    KeyboardButton,
 )
 
 from telegram.ext import (
@@ -40,8 +40,12 @@ logger = logging.getLogger(__name__)
 # TELEGRAM
 # =========================================================
 
-TELEGRAM_BOT_TOKEN = "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
+TELEGRAM_BOT_TOKEN = (
+    "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
+)
 
+# فعلاً 0 یعنی همه کاربران مجاز هستند.
+# بعداً می‌توانی Chat ID خودت را اینجا قرار بدهی.
 ALLOWED_CHAT_ID = "0"
 
 
@@ -50,20 +54,20 @@ ALLOWED_CHAT_ID = "0"
 # =========================================================
 
 MQTT_HOST = (
-    "c8f63357997a47a8b37f0495aac24c7d"
-    ".s1.eu.hivemq.cloud"
+    "c8f63357997a47a8b37f0495aac24c7d.s1.eu.hivemq.cloud"
 )
 
 MQTT_PORT = 8883
 
 MQTT_USERNAME = "hamed_esp32"
-
 MQTT_PASSWORD = "Ha00102030meD@"
 
+
 # =========================================================
-# فقط یک Topic
+# MQTT TOPIC
 # =========================================================
 
+# همان Topic قبلی
 MQTT_TOPIC = "hamed/esp32/led"
 
 
@@ -71,7 +75,9 @@ MQTT_TOPIC = "hamed/esp32/led"
 # RENDER
 # =========================================================
 
-RENDER_URL = "https://telegram-esp32-control.onrender.com"
+RENDER_URL = (
+    "https://telegram-esp32-control.onrender.com"
+)
 
 PORT = int(
     os.getenv(
@@ -93,45 +99,48 @@ telegram_app = None
 
 
 # =========================================================
-# MQTT VARIABLES
-# =========================================================
-
-mqtt_client = mqtt.Client(
-    mqtt.CallbackAPIVersion.VERSION2,
-    client_id="Telegram_ESP32_Render"
-)
-
-mqtt_client.username_pw_set(
-    MQTT_USERNAME,
-    MQTT_PASSWORD
-)
-
-mqtt_client.tls_set(
-    cert_reqs=ssl.CERT_REQUIRED,
-    tls_version=ssl.PROTOCOL_TLS_CLIENT
-)
-
-
-# =========================================================
-# TEMPERATURE
+# TEMPERATURE DATA
 # =========================================================
 
 latest_temperature = None
 
-temperature_waiting = False
-
-temperature_event = asyncio.Event()
+last_temperature_time = 0
 
 
 # =========================================================
-# CONTINUOUS REPORTING
+# TEMPERATURE TIMEOUT
 # =========================================================
 
-report_tasks = {}
+# اگر بیشتر از 30 ثانیه از آخرین دما گذشته باشد
+# اطلاعات را قدیمی در نظر می‌گیریم.
+
+TEMPERATURE_TIMEOUT = 30
 
 
 # =========================================================
-# MQTT CONNECT
+# TELEGRAM KEYBOARD
+# =========================================================
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [
+            KeyboardButton("🟢 LED ON"),
+            KeyboardButton("🔴 LED OFF"),
+        ],
+        [
+            KeyboardButton("🌡 دمای فعلی"),
+        ],
+        [
+            KeyboardButton("📊 وضعیت سیستم"),
+        ],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+)
+
+
+# =========================================================
+# MQTT CALLBACK
 # =========================================================
 
 def on_connect(
@@ -142,12 +151,42 @@ def on_connect(
     properties
 ):
 
-    print()
     print("======================================")
     print("MQTT STATUS")
     print("Connected to HiveMQ")
     print(f"Reason code: {reason_code}")
     print("======================================")
+
+
+    # =====================================================
+    # Subscribe
+    # =====================================================
+
+    result = client.subscribe(
+        MQTT_TOPIC,
+        qos=1
+    )
+
+
+    if result[0] == mqtt.MQTT_ERR_SUCCESS:
+
+        print(
+            "Subscribed successfully:"
+        )
+
+        print(
+            MQTT_TOPIC
+        )
+
+    else:
+
+        print(
+            "MQTT subscribe failed:"
+        )
+
+        print(
+            result
+        )
 
 
 # =========================================================
@@ -162,9 +201,13 @@ def on_disconnect(
     properties
 ):
 
-    print()
-    print("MQTT disconnected")
-    print(f"Reason code: {reason_code}")
+    print(
+        "MQTT disconnected"
+    )
+
+    print(
+        f"Reason code: {reason_code}"
+    )
 
 
 # =========================================================
@@ -174,84 +217,122 @@ def on_disconnect(
 def on_message(
     client,
     userdata,
-    message
+    msg
 ):
 
     global latest_temperature
+    global last_temperature_time
+
 
     try:
 
-        payload = (
-            message.payload
+        message = (
+            msg.payload
             .decode("utf-8")
             .strip()
         )
 
-        print()
-        print("======================================")
-        print("MQTT MESSAGE")
-        print(f"Topic: {message.topic}")
-        print(f"Message: {payload}")
-        print("======================================")
-
-        # ---------------------------------------------
-        # Temperature
-        # ---------------------------------------------
-
-        if payload.startswith("TEMP:"):
-
-            value = payload.replace(
-                "TEMP:",
-                ""
-            ).strip()
-
-            try:
-
-                latest_temperature = float(value)
-
-                print(
-                    f"Temperature received: "
-                    f"{latest_temperature:.2f} C"
-                )
-
-                try:
-                    temperature_event.set()
-
-                except Exception:
-                    pass
-
-            except ValueError:
-
-                print(
-                    "Invalid temperature value."
-                )
-
-        elif payload == "TEMP_ERROR":
-
-            print(
-                "ESP32 reported DS18B20 error."
-            )
-
-            try:
-                temperature_event.set()
-
-            except Exception:
-                pass
-
     except Exception as e:
 
         print(
-            "MQTT message error:",
-            e
+            "MQTT decode error:"
         )
 
+        print(e)
+
+        return
+
+
+    print("--------------------------------------")
+
+    print(
+        f"MQTT Topic: {msg.topic}"
+    )
+
+    print(
+        f"MQTT Message: {message}"
+    )
+
+    print("--------------------------------------")
+
+
+    # =====================================================
+    # TEMPERATURE
+    # =====================================================
+
+    if message.startswith("TEMP:"):
+
+        try:
+
+            temperature_text = (
+                message[5:]
+            )
+
+            temperature = float(
+                temperature_text
+            )
+
+            latest_temperature = (
+                temperature
+            )
+
+            last_temperature_time = (
+                time.time()
+            )
+
+            print(
+                f"Temperature received: "
+                f"{temperature:.2f} C"
+            )
+
+        except ValueError:
+
+            print(
+                "Invalid temperature message:"
+            )
+
+            print(
+                message
+            )
+
+        return
+
+
+    # =====================================================
+    # OTHER MQTT MESSAGES
+    # =====================================================
+
+    print(
+        "MQTT message is not temperature."
+    )
+
 
 # =========================================================
-# ASSIGN CALLBACKS
+# MQTT CLIENT
 # =========================================================
+
+mqtt_client = mqtt.Client(
+    mqtt.CallbackAPIVersion.VERSION2,
+    client_id="Telegram_ESP32_Render"
+)
+
+
+mqtt_client.username_pw_set(
+    MQTT_USERNAME,
+    MQTT_PASSWORD
+)
+
+
+mqtt_client.tls_set(
+    cert_reqs=ssl.CERT_REQUIRED,
+    tls_version=ssl.PROTOCOL_TLS_CLIENT
+)
+
 
 mqtt_client.on_connect = on_connect
+
 mqtt_client.on_disconnect = on_disconnect
+
 mqtt_client.on_message = on_message
 
 
@@ -261,7 +342,10 @@ mqtt_client.on_message = on_message
 
 def connect_mqtt():
 
-    print("Connecting to HiveMQ...")
+    print(
+        "Connecting to HiveMQ..."
+    )
+
 
     try:
 
@@ -273,18 +357,10 @@ def connect_mqtt():
 
         mqtt_client.loop_start()
 
-        print("MQTT connection started.")
-
-        # Subscribe to same topic
-        mqtt_client.subscribe(
-            MQTT_TOPIC,
-            qos=1
-        )
-
         print(
-            "Subscribed:",
-            MQTT_TOPIC
+            "MQTT connection started."
         )
+
 
     except Exception as e:
 
@@ -303,54 +379,28 @@ def is_allowed(
     update: Update
 ) -> bool:
 
-    if not update.effective_chat:
+    if update.effective_chat is None:
+
         return False
+
 
     chat_id = str(
         update.effective_chat.id
     )
 
+
     if ALLOWED_CHAT_ID == "0":
+
         return True
 
-    return chat_id == ALLOWED_CHAT_ID
 
-
-# =========================================================
-# MAIN MENU
-# =========================================================
-
-def main_menu():
-
-    keyboard = [
-
-        [
-            "🟢 LED ON",
-            "🔴 LED OFF"
-        ],
-
-        [
-            "🌡️ دمای فعلی"
-        ],
-
-        [
-            "📊 گزارش مستمر دما"
-        ],
-
-        [
-            "⛔ توقف گزارش"
-        ],
-
-    ]
-
-    return ReplyKeyboardMarkup(
-        keyboard,
-        resize_keyboard=True
+    return (
+        chat_id == ALLOWED_CHAT_ID
     )
 
 
 # =========================================================
-# START
+# /START
 # =========================================================
 
 async def start_command(
@@ -359,350 +409,261 @@ async def start_command(
 ):
 
     if not update.effective_chat:
+
         return
 
-    chat_id = update.effective_chat.id
 
-    print()
+    chat_id = (
+        update.effective_chat.id
+    )
+
+
     print("--------------------------------------")
+
     print(
         f"Telegram Chat ID: {chat_id}"
     )
-    print("Command: /start")
+
+    print(
+        "Command: /start"
+    )
+
     print("--------------------------------------")
 
+
     await update.message.reply_text(
-
         "🤖 ESP32 Control Bot\n\n"
-        "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
-
-        reply_markup=main_menu()
+        "لطفاً یک گزینه را انتخاب کنید:",
+        reply_markup=MAIN_KEYBOARD
     )
 
 
 # =========================================================
-# GET TEMPERATURE
+# BUTTON MENU
 # =========================================================
 
-async def get_temperature(
-    update: Update
+async def show_menu(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
-    global latest_temperature
-    global temperature_waiting
-    global temperature_event
+    await update.message.reply_text(
+        "🎛 کنترل ESP32\n\n"
+        "لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+        reply_markup=MAIN_KEYBOARD
+    )
+
+
+# =========================================================
+# SEND LED COMMAND
+# =========================================================
+
+async def send_led_command(
+    update: Update,
+    command: str,
+    text: str
+):
 
     if not mqtt_client.is_connected():
 
         await update.message.reply_text(
-            "❌ اتصال MQTT برقرار نیست."
+            "❌ اتصال MQTT برقرار نیست.",
+            reply_markup=MAIN_KEYBOARD
         )
 
         return
 
-    # ---------------------------------------------
-    # Reset previous value
-    # ---------------------------------------------
-
-    latest_temperature = None
-
-    temperature_waiting = True
-
-    temperature_event = asyncio.Event()
-
-    # ---------------------------------------------
-    # Send GET_TEMP
-    # ---------------------------------------------
 
     result = mqtt_client.publish(
         MQTT_TOPIC,
-        "GET_TEMP",
+        command,
         qos=1
     )
 
-    if result.rc != mqtt.MQTT_ERR_SUCCESS:
 
-        temperature_waiting = False
+    if result.rc == mqtt.MQTT_ERR_SUCCESS:
+
+        if command == "ON":
+
+            await update.message.reply_text(
+                "🟢 LED روشن شد",
+                reply_markup=MAIN_KEYBOARD
+            )
+
+            print(
+                "MQTT -> ON"
+            )
+
+        else:
+
+            await update.message.reply_text(
+                "🔴 LED خاموش شد",
+                reply_markup=MAIN_KEYBOARD
+            )
+
+            print(
+                "MQTT -> OFF"
+            )
+
+    else:
+
+        print(
+            "MQTT publish failed:"
+        )
+
+        print(
+            result.rc
+        )
 
         await update.message.reply_text(
-            "❌ درخواست دما ارسال نشد."
+            "❌ ارسال فرمان انجام نشد.",
+            reply_markup=MAIN_KEYBOARD
         )
 
-        return
 
-    print(
-        "MQTT -> GET_TEMP"
-    )
+# =========================================================
+# SHOW TEMPERATURE
+# =========================================================
 
-    # ---------------------------------------------
-    # Wait for ESP32 response
-    # ---------------------------------------------
+async def show_temperature(
+    update: Update
+):
 
-    try:
-
-        await asyncio.wait_for(
-            temperature_event.wait(),
-            timeout=8
-        )
-
-    except asyncio.TimeoutError:
-
-        temperature_waiting = False
-
-        await update.message.reply_text(
-            "❌ دریافت دما از ESP32 انجام نشد."
-        )
-
-        return
-
-    temperature_waiting = False
-
-    # ---------------------------------------------
-    # Check result
-    # ---------------------------------------------
+    # =====================================================
+    # No temperature received yet
+    # =====================================================
 
     if latest_temperature is None:
 
         await update.message.reply_text(
-            "❌ سنسور DS18B20 پاسخ معتبر نداد."
+            "🌡 دمای فعلی\n\n"
+            "❌ هنوز دمایی از ESP32 دریافت نشده است.\n\n"
+            "لطفاً چند ثانیه صبر کنید و دوباره امتحان کنید.",
+            reply_markup=MAIN_KEYBOARD
         )
 
         return
 
-    await update.message.reply_text(
 
-        "🌡️ دمای فعلی ESP32:\n\n"
-        f"🌡️ {latest_temperature:.2f} °C",
+    # =====================================================
+    # Temperature age
+    # =====================================================
 
-        reply_markup=main_menu()
+    age = (
+        time.time()
+        - last_temperature_time
     )
 
 
-# =========================================================
-# CONTINUOUS REPORT
-# =========================================================
+    # =====================================================
+    # Old temperature
+    # =====================================================
 
-async def continuous_temperature_report(
-    chat_id: int,
-    interval: int,
-    context: ContextTypes.DEFAULT_TYPE
-):
+    if age > TEMPERATURE_TIMEOUT:
 
-    print()
-    print(
-        f"Starting temperature report "
-        f"for chat {chat_id}"
-    )
-
-    try:
-
-        while True:
-
-            # -----------------------------------------
-            # MQTT check
-            # -----------------------------------------
-
-            if not mqtt_client.is_connected():
-
-                try:
-
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            "❌ اتصال MQTT برقرار نیست."
-                        )
-                    )
-
-                except Exception:
-                    pass
-
-                await asyncio.sleep(interval)
-
-                continue
-
-            # -----------------------------------------
-            # Reset
-            # -----------------------------------------
-
-            global latest_temperature
-            global temperature_event
-
-            latest_temperature = None
-
-            temperature_event = asyncio.Event()
-
-            # -----------------------------------------
-            # Request temperature
-            # -----------------------------------------
-
-            result = mqtt_client.publish(
-                MQTT_TOPIC,
-                "GET_TEMP",
-                qos=1
-            )
-
-            if result.rc != mqtt.MQTT_ERR_SUCCESS:
-
-                await asyncio.sleep(interval)
-
-                continue
-
-            print(
-                f"Report -> GET_TEMP "
-                f"(chat {chat_id})"
-            )
-
-            # -----------------------------------------
-            # Wait for ESP32
-            # -----------------------------------------
-
-            try:
-
-                await asyncio.wait_for(
-                    temperature_event.wait(),
-                    timeout=8
-                )
-
-            except asyncio.TimeoutError:
-
-                try:
-
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            "⚠️ دریافت دما از ESP32 "
-                            "انجام نشد."
-                        )
-                    )
-
-                except Exception:
-                    pass
-
-                await asyncio.sleep(interval)
-
-                continue
-
-            # -----------------------------------------
-            # Send temperature
-            # -----------------------------------------
-
-            if latest_temperature is not None:
-
-                await context.bot.send_message(
-
-                    chat_id=chat_id,
-
-                    text=(
-                        "📊 گزارش دما\n\n"
-                        f"🌡️ دما: "
-                        f"{latest_temperature:.2f} °C"
-                    )
-                )
-
-            # -----------------------------------------
-            # Wait
-            # -----------------------------------------
-
-            await asyncio.sleep(interval)
-
-    except asyncio.CancelledError:
-
-        print(
-            f"Temperature report stopped "
-            f"for chat {chat_id}"
+        await update.message.reply_text(
+            "🌡 دمای فعلی\n\n"
+            f"آخرین دمای دریافت‌شده:\n"
+            f"🌡 {latest_temperature:.2f} °C\n\n"
+            f"⚠️ این اطلاعات {int(age)} ثانیه قبل دریافت شده است.\n"
+            "ممکن است ESP32 در حال حاضر متصل نباشد.",
+            reply_markup=MAIN_KEYBOARD
         )
 
-        raise
+        return
 
 
-# =========================================================
-# START CONTINUOUS REPORT
-# =========================================================
-
-async def start_temperature_report(
-    update: Update,
-    interval: int
-):
-
-    chat_id = update.effective_chat.id
-
-    # ---------------------------------------------
-    # Stop previous report
-    # ---------------------------------------------
-
-    if chat_id in report_tasks:
-
-        old_task = report_tasks[chat_id]
-
-        if not old_task.done():
-
-            old_task.cancel()
-
-    # ---------------------------------------------
-    # Create new task
-    # ---------------------------------------------
-
-    task = asyncio.create_task(
-
-        continuous_temperature_report(
-            chat_id,
-            interval,
-            update.get_bot().application
-        )
-    )
-
-    report_tasks[chat_id] = task
+    # =====================================================
+    # Current temperature
+    # =====================================================
 
     await update.message.reply_text(
-
-        "📊 گزارش مستمر دما فعال شد.\n\n"
-        f"⏱️ هر {interval} ثانیه یک گزارش ارسال می‌شود.\n\n"
-        "برای توقف، گزینه «⛔ توقف گزارش» را بزنید.",
-
-        reply_markup=main_menu()
+        "🌡 دمای فعلی\n\n"
+        f"🌡 {latest_temperature:.2f} °C\n\n"
+        f"🟢 سنسور DS18B20 فعال است\n"
+        f"📡 آخرین دریافت: {int(age)} ثانیه قبل",
+        reply_markup=MAIN_KEYBOARD
     )
 
 
 # =========================================================
-# STOP REPORT
+# SYSTEM STATUS
 # =========================================================
 
-async def stop_temperature_report(
+async def show_status(
     update: Update
 ):
 
-    chat_id = update.effective_chat.id
+    # =====================================================
+    # MQTT
+    # =====================================================
 
-    if chat_id not in report_tasks:
+    if mqtt_client.is_connected():
 
-        await update.message.reply_text(
+        mqtt_status = "🟢 Connected"
 
-            "ℹ️ در حال حاضر گزارش مستمر "
-            "دما فعال نیست.",
+    else:
 
-            reply_markup=main_menu()
+        mqtt_status = "🔴 Disconnected"
+
+
+    # =====================================================
+    # Temperature
+    # =====================================================
+
+    if latest_temperature is None:
+
+        temperature_status = (
+            "❌ No data"
         )
 
-        return
+    else:
 
-    task = report_tasks[chat_id]
+        age = (
+            time.time()
+            - last_temperature_time
+        )
 
-    if not task.done():
 
-        task.cancel()
+        if age <= TEMPERATURE_TIMEOUT:
 
-    del report_tasks[chat_id]
+            temperature_status = (
+                f"🟢 {latest_temperature:.2f} °C"
+            )
+
+        else:
+
+            temperature_status = (
+                f"🟡 {latest_temperature:.2f} °C "
+                f"(old data)"
+            )
+
+
+    # =====================================================
+    # Telegram response
+    # =====================================================
 
     await update.message.reply_text(
 
-        "⛔ گزارش مستمر دما متوقف شد.",
+        "📊 وضعیت سیستم\n\n"
 
-        reply_markup=main_menu()
+        f"MQTT: {mqtt_status}\n"
+
+        f"🌡 دما: {temperature_status}\n"
+
+        f"📡 Topic:\n"
+        f"{MQTT_TOPIC}\n\n"
+
+        "ESP32 + DS18B20\n"
+        "GPIO 23: Temperature\n"
+        "GPIO 2: LED",
+
+        reply_markup=MAIN_KEYBOARD
     )
 
 
 # =========================================================
-# HANDLE TEXT
+# TEXT MESSAGE
 # =========================================================
 
 async def handle_message(
@@ -711,10 +672,19 @@ async def handle_message(
 ):
 
     if not update.effective_chat:
+
         return
 
+
     if not update.message:
+
         return
+
+
+    chat_id = (
+        update.effective_chat.id
+    )
+
 
     text = (
         update.message.text
@@ -722,17 +692,19 @@ async def handle_message(
         .lower()
     )
 
-    chat_id = update.effective_chat.id
 
-    print()
     print("--------------------------------------")
+
     print(
         f"Telegram Chat ID: {chat_id}"
     )
+
     print(
         f"Message: {text}"
     )
+
     print("--------------------------------------")
+
 
     # =====================================================
     # SECURITY
@@ -740,225 +712,119 @@ async def handle_message(
 
     if not is_allowed(update):
 
+        print(
+            "Unauthorized Telegram user."
+        )
+
         await update.message.reply_text(
             "⛔ شما اجازه کنترل این دستگاه را ندارید."
         )
 
         return
 
+
     # =====================================================
     # LED ON
     # =====================================================
 
-    if text in [
+    if text in (
         "🟢 led on",
         "led on"
-    ]:
+    ):
 
-        if not mqtt_client.is_connected():
-
-            await update.message.reply_text(
-                "❌ اتصال MQTT برقرار نیست."
-            )
-
-            return
-
-        result = mqtt_client.publish(
-            MQTT_TOPIC,
+        await send_led_command(
+            update,
             "ON",
-            qos=1
+            text
         )
 
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-
-            print("MQTT -> ON")
-
-            await update.message.reply_text(
-                "🟢 LED روشن شد",
-                reply_markup=main_menu()
-            )
-
-        else:
-
-            await update.message.reply_text(
-                "❌ ارسال فرمان انجام نشد."
-            )
-
         return
+
 
     # =====================================================
     # LED OFF
     # =====================================================
 
-    if text in [
+    if text in (
         "🔴 led off",
         "led off"
-    ]:
+    ):
 
-        if not mqtt_client.is_connected():
-
-            await update.message.reply_text(
-                "❌ اتصال MQTT برقرار نیست."
-            )
-
-            return
-
-        result = mqtt_client.publish(
-            MQTT_TOPIC,
+        await send_led_command(
+            update,
             "OFF",
-            qos=1
+            text
         )
-
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-
-            print("MQTT -> OFF")
-
-            await update.message.reply_text(
-                "🔴 LED خاموش شد",
-                reply_markup=main_menu()
-            )
-
-        else:
-
-            await update.message.reply_text(
-                "❌ ارسال فرمان انجام نشد."
-            )
 
         return
 
+
     # =====================================================
-    # CURRENT TEMPERATURE
+    # TEMPERATURE
     # =====================================================
 
-    if text in [
-        "🌡️ دمای فعلی",
+    if text in (
+        "🌡 دمای فعلی",
         "دمای فعلی",
-        "temperature",
-        "temp"
-    ]:
+        "temperature"
+    ):
 
-        await get_temperature(update)
-
-        return
-
-    # =====================================================
-    # CONTINUOUS REPORT
-    # =====================================================
-
-    if text in [
-        "📊 گزارش مستمر دما",
-        "گزارش مستمر دما"
-    ]:
-
-        context.user_data[
-            "waiting_for_interval"
-        ] = True
-
-        await update.message.reply_text(
-
-            "⏱️ لطفاً مشخص کنید هر چند ثانیه "
-            "یک بار گزارش دما ارسال شود.\n\n"
-
-            "مثلاً:\n"
-            "5\n"
-            "10\n"
-            "30\n"
-            "60",
-
-            reply_markup=ReplyKeyboardRemove()
-        )
-
-        return
-
-    # =====================================================
-    # STOP REPORT
-    # =====================================================
-
-    if text in [
-        "⛔ توقف گزارش",
-        "توقف گزارش"
-    ]:
-
-        await stop_temperature_report(
+        await show_temperature(
             update
         )
 
         return
 
+
     # =====================================================
-    # INTERVAL
+    # STATUS
     # =====================================================
 
-    if context.user_data.get(
-        "waiting_for_interval",
-        False
+    if text in (
+        "📊 وضعیت سیستم",
+        "وضعیت سیستم",
+        "status"
     ):
 
-        try:
-
-            interval = int(text)
-
-            if interval < 2:
-
-                await update.message.reply_text(
-
-                    "⚠️ حداقل زمان گزارش "
-                    "2 ثانیه است.\n\n"
-                    "یک عدد بزرگ‌تر وارد کنید."
-                )
-
-                return
-
-            if interval > 3600:
-
-                await update.message.reply_text(
-
-                    "⚠️ حداکثر زمان گزارش "
-                    "3600 ثانیه است.\n\n"
-                    "لطفاً مقدار دیگری وارد کنید."
-                )
-
-                return
-
-        except ValueError:
-
-            await update.message.reply_text(
-
-                "❌ لطفاً فقط عدد وارد کنید.\n\n"
-                "مثلاً:\n"
-                "5\n"
-                "10\n"
-                "30\n"
-                "60"
-            )
-
-            return
-
-        context.user_data[
-            "waiting_for_interval"
-        ] = False
-
-        await start_temperature_report(
-            update,
-            interval
+        await show_status(
+            update
         )
 
         return
 
+
     # =====================================================
-    # INVALID
+    # MENU
+    # =====================================================
+
+    if text in (
+        "menu",
+        "منو"
+    ):
+
+        await show_menu(
+            update,
+            context
+        )
+
+        return
+
+
+    # =====================================================
+    # UNKNOWN
     # =====================================================
 
     await update.message.reply_text(
 
-        "❓ لطفاً یکی از گزینه‌های منو را انتخاب کنید.",
+        "❓ دستور نامعتبر است.\n\n"
+        "لطفاً یکی از گزینه‌های منو را انتخاب کنید.",
 
-        reply_markup=main_menu()
+        reply_markup=MAIN_KEYBOARD
     )
 
 
 # =========================================================
-# HEALTH
+# HEALTH CHECK
 # =========================================================
 
 @app.get("/")
@@ -987,9 +853,12 @@ async def telegram_webhook(
     request: Request
 ):
 
-    received_secret = request.headers.get(
-        "X-Telegram-Bot-Api-Secret-Token"
+    received_secret = (
+        request.headers.get(
+            "X-Telegram-Bot-Api-Secret-Token"
+        )
     )
+
 
     if received_secret != WEBHOOK_SECRET:
 
@@ -1002,29 +871,36 @@ async def telegram_webhook(
             detail="Unauthorized"
         )
 
+
     try:
 
         data = await request.json()
+
 
         update = Update.de_json(
             data,
             telegram_app.bot
         )
 
+
         await telegram_app.update_queue.put(
             update
         )
+
 
         return {
             "ok": True
         }
 
+
     except Exception as e:
 
         print(
-            "Webhook error:",
-            e
+            "Webhook error:"
         )
+
+        print(e)
+
 
         raise HTTPException(
             status_code=500,
@@ -1041,20 +917,28 @@ async def startup_event():
 
     global telegram_app
 
-    print()
-    print("======================================")
-    print("     TELEGRAM ESP32 RENDER BOT")
+
+    print("")
+
     print("======================================")
 
-    # -----------------------------------------------------
+    print(
+        "     TELEGRAM ESP32 RENDER BOT"
+    )
+
+    print("======================================")
+
+
+    # =====================================================
     # MQTT
-    # -----------------------------------------------------
+    # =====================================================
 
     connect_mqtt()
 
-    # -----------------------------------------------------
-    # Telegram
-    # -----------------------------------------------------
+
+    # =====================================================
+    # Telegram Application
+    # =====================================================
 
     telegram_app = (
         Application.builder()
@@ -1063,49 +947,56 @@ async def startup_event():
         .build()
     )
 
-    # -----------------------------------------------------
-    # Handlers
-    # -----------------------------------------------------
+
+    # =====================================================
+    # Telegram Handlers
+    # =====================================================
 
     telegram_app.add_handler(
-
         CommandHandler(
             "start",
             start_command
         )
     )
 
-    telegram_app.add_handler(
 
+    telegram_app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         )
     )
 
-    # -----------------------------------------------------
+
+    # =====================================================
     # Initialize
-    # -----------------------------------------------------
+    # =====================================================
 
     await telegram_app.initialize()
 
     await telegram_app.start()
 
-    # -----------------------------------------------------
-    # Webhook
-    # -----------------------------------------------------
+
+    # =====================================================
+    # Set Webhook
+    # =====================================================
 
     webhook_url = (
-        RENDER_URL +
-        "/telegram"
+        RENDER_URL
+        + "/telegram"
     )
 
-    print()
+
+    print("")
+
     print(
         "Setting Telegram webhook..."
     )
 
-    print(webhook_url)
+    print(
+        webhook_url
+    )
+
 
     await telegram_app.bot.set_webhook(
 
@@ -1116,7 +1007,9 @@ async def startup_event():
         allowed_updates=Update.ALL_TYPES
     )
 
-    print()
+
+    print("")
+
     print(
         "Telegram webhook configured."
     )
@@ -1125,7 +1018,7 @@ async def startup_event():
         "Bot is ready."
     )
 
-    print()
+    print("")
 
 
 # =========================================================
@@ -1139,17 +1032,6 @@ async def shutdown_event():
         "Stopping bot..."
     )
 
-    # Stop temperature reports
-
-    for task in report_tasks.values():
-
-        if not task.done():
-
-            task.cancel()
-
-    report_tasks.clear()
-
-    # Telegram
 
     if telegram_app:
 
@@ -1157,7 +1039,6 @@ async def shutdown_event():
 
         await telegram_app.shutdown()
 
-    # MQTT
 
     mqtt_client.loop_stop()
 
@@ -1165,7 +1046,7 @@ async def shutdown_event():
 
 
 # =========================================================
-# START
+# LOCAL START
 # =========================================================
 
 if __name__ == "__main__":
