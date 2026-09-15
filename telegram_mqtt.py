@@ -6,7 +6,7 @@ import asyncio
 import logging
 import uuid
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
@@ -18,7 +18,6 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardRemove,
 )
 
 from telegram.ext import (
@@ -46,19 +45,30 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# TELEGRAM SETTINGS
+# TELEGRAM
 # =========================================================
 
+# توکن جدید BotFather
 TELEGRAM_BOT_TOKEN = (
     "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
 )
 
-# 0 = همه کاربران مجاز
-ALLOWED_CHAT_ID = "0"
+# =========================================================
+# LOGIN SETTINGS
+# =========================================================
+
+LOGIN_USERNAME = "admin"
+LOGIN_PASSWORD = "12"
+
+# حداکثر تعداد تلاش اشتباه
+MAX_LOGIN_ATTEMPTS = 3
+
+# مدت قفل بعد از 3 تلاش اشتباه
+LOGIN_LOCK_SECONDS = 60
 
 
 # =========================================================
-# HIVEMQ SETTINGS
+# HIVEMQ
 # =========================================================
 
 MQTT_HOST = "c8f63357997a47a8b37f0495aac24c7d.s1.eu.hivemq.cloud"
@@ -83,7 +93,6 @@ RENDER_URL = (
     "https://telegram-esp32-control.onrender.com"
 )
 
-# Render خودش PORT را تعیین می‌کند
 PORT = int(
     os.getenv(
         "PORT",
@@ -91,16 +100,13 @@ PORT = int(
     )
 )
 
-WEBHOOK_SECRET = (
-    "HamedESP32_2026_X9"
-)
+WEBHOOK_SECRET = "HamedESP32_2026_X9"
 
 
 # =========================================================
 # TIMEZONE
 # =========================================================
 
-# زمان ثبت گزارش‌ها
 LOCAL_TZ = ZoneInfo(
     "Asia/Tehran"
 )
@@ -124,7 +130,6 @@ EXCEL_FILE = (
     "temperature_datalog.xlsx"
 )
 
-# یک رکورد هر 60 ثانیه
 DATALOG_INTERVAL = 60
 
 
@@ -150,34 +155,76 @@ temperature_logger_task = None
 
 continuous_tasks = {}
 
-waiting_for_interval = set()
+
+# =========================================================
+# USER LOGIN STATE
+# =========================================================
+
+authenticated_users = set()
+
+login_steps = {}
+
+login_attempts = {}
+
+login_locked_until = {}
 
 
 # =========================================================
-# SECURITY
+# LOGIN HELPERS
 # =========================================================
 
-def is_allowed(
-    update: Update
+def is_authenticated(
+    chat_id
+):
+    return chat_id in authenticated_users
+
+
+def clear_login_state(
+    chat_id
 ):
 
-    if update.effective_chat is None:
-        return False
-
-    chat_id = str(
-        update.effective_chat.id
+    login_steps.pop(
+        chat_id,
+        None
     )
 
-    if ALLOWED_CHAT_ID == "0":
-        return True
 
-    return (
-        chat_id == ALLOWED_CHAT_ID
+def logout_user(
+    chat_id
+):
+
+    authenticated_users.discard(
+        chat_id
+    )
+
+    login_steps.pop(
+        chat_id,
+        None
     )
 
 
 # =========================================================
-# INLINE MAIN MENU
+# LOGIN MENU
+# =========================================================
+
+def login_menu():
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🔐 ورود به سیستم",
+                callback_data="login_start"
+            )
+        ]
+    ]
+
+    return InlineKeyboardMarkup(
+        keyboard
+    )
+
+
+# =========================================================
+# MAIN MENU
 # =========================================================
 
 def main_menu():
@@ -186,19 +233,12 @@ def main_menu():
 
         [
             InlineKeyboardButton(
-                "🟢 روشن کردن LED",
-                callback_data="led_on"
+                "🟢 کنترل LED",
+                callback_data="led_menu"
             ),
 
             InlineKeyboardButton(
-                "🔴 خاموش کردن LED",
-                callback_data="led_off"
-            ),
-        ],
-
-        [
-            InlineKeyboardButton(
-                "🌡️ دمای فعلی",
+                "🌡️ دما",
                 callback_data="temperature"
             ),
         ],
@@ -224,7 +264,12 @@ def main_menu():
 
         [
             InlineKeyboardButton(
-                "❌ بستن منو",
+                "🚪 خروج از حساب",
+                callback_data="logout"
+            ),
+
+            InlineKeyboardButton(
+                "❌ بستن",
                 callback_data="close"
             ),
         ],
@@ -236,18 +281,32 @@ def main_menu():
 
 
 # =========================================================
-# BACK BUTTON
+# LED MENU
 # =========================================================
 
-def back_menu():
+def led_menu():
 
     keyboard = [
+
         [
             InlineKeyboardButton(
-                "🔙 بازگشت به منوی اصلی",
+                "🟢 روشن",
+                callback_data="led_on"
+            ),
+
+            InlineKeyboardButton(
+                "🔴 خاموش",
+                callback_data="led_off"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🔙 بازگشت",
                 callback_data="home"
             ),
         ],
+
     ]
 
     return InlineKeyboardMarkup(
@@ -267,6 +326,13 @@ def datalogger_menu():
             InlineKeyboardButton(
                 "📄 دریافت فایل Excel",
                 callback_data="send_datalogger"
+            ),
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🔄 به‌روزرسانی اطلاعات",
+                callback_data="datalogger"
             ),
         ],
 
@@ -352,7 +418,29 @@ def continuous_menu():
 
 
 # =========================================================
-# INITIALIZE CSV
+# BACK MENU
+# =========================================================
+
+def back_menu():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "🔙 بازگشت به منوی اصلی",
+                callback_data="home"
+            ),
+        ]
+
+    ]
+
+    return InlineKeyboardMarkup(
+        keyboard
+    )
+
+
+# =========================================================
+# CSV
 # =========================================================
 
 def initialize_csv():
@@ -360,7 +448,9 @@ def initialize_csv():
     if os.path.exists(
         CSV_FILE
     ):
+
         return
+
 
     try:
 
@@ -383,9 +473,11 @@ def initialize_csv():
                 ]
             )
 
+
         print(
             "CSV datalogger file created."
         )
+
 
     except Exception as e:
 
@@ -397,16 +489,18 @@ def initialize_csv():
 
 
 # =========================================================
-# CREATE EXCEL
+# EXCEL
 # =========================================================
 
 def create_excel():
 
     initialize_csv()
 
+
     try:
 
         rows = []
+
 
         with open(
             CSV_FILE,
@@ -419,17 +513,20 @@ def create_excel():
                 file
             )
 
+
             for item in reader:
 
                 try:
 
-                    date_text = item[
-                        "Date"
-                    ]
+                    dt = datetime.strptime(
+                        (
+                            item["Date"]
+                            + " "
+                            + item["Time"]
+                        ),
+                        "%Y-%m-%d %H:%M:%S"
+                    )
 
-                    time_text = item[
-                        "Time"
-                    ]
 
                     temperature = float(
                         item[
@@ -437,10 +534,6 @@ def create_excel():
                         ]
                     )
 
-                    dt = datetime.strptime(
-                        f"{date_text} {time_text}",
-                        "%Y-%m-%d %H:%M:%S"
-                    )
 
                     rows.append(
                         (
@@ -448,6 +541,7 @@ def create_excel():
                             temperature
                         )
                     )
+
 
                 except Exception:
 
@@ -458,14 +552,15 @@ def create_excel():
             EXCEL_FILE
         )
 
+
         worksheet = workbook.add_worksheet(
             "Temperature Log"
         )
 
 
-        # =====================================================
+        # =================================================
         # FORMATS
-        # =====================================================
+        # =================================================
 
         title_format = workbook.add_format(
             {
@@ -476,6 +571,7 @@ def create_excel():
             }
         )
 
+
         header_format = workbook.add_format(
             {
                 "bold": True,
@@ -485,12 +581,14 @@ def create_excel():
             }
         )
 
+
         date_format = workbook.add_format(
             {
                 "num_format": "yyyy-mm-dd",
                 "border": 1,
             }
         )
+
 
         time_format = workbook.add_format(
             {
@@ -499,12 +597,14 @@ def create_excel():
             }
         )
 
+
         temperature_format = workbook.add_format(
             {
                 "num_format": "0.00",
                 "border": 1,
             }
         )
+
 
         info_format = workbook.add_format(
             {
@@ -514,9 +614,9 @@ def create_excel():
         )
 
 
-        # =====================================================
+        # =================================================
         # TITLE
-        # =====================================================
+        # =================================================
 
         worksheet.merge_range(
             "A1:C1",
@@ -525,9 +625,9 @@ def create_excel():
         )
 
 
-        # =====================================================
+        # =================================================
         # HEADER
-        # =====================================================
+        # =================================================
 
         worksheet.write(
             "A3",
@@ -535,11 +635,13 @@ def create_excel():
             header_format
         )
 
+
         worksheet.write(
             "B3",
             "Time",
             header_format
         )
+
 
         worksheet.write(
             "C3",
@@ -548,47 +650,51 @@ def create_excel():
         )
 
 
-        # =====================================================
+        # =================================================
         # DATA
-        # =====================================================
+        # =================================================
 
         first_row = 3
+
 
         for index, (
             dt,
             temperature
         ) in enumerate(rows):
 
-            excel_row = (
+            row = (
                 first_row
                 + index
             )
 
+
             worksheet.write_datetime(
-                excel_row,
+                row,
                 0,
                 dt,
                 date_format
             )
 
+
             worksheet.write_datetime(
-                excel_row,
+                row,
                 1,
                 dt,
                 time_format
             )
 
+
             worksheet.write_number(
-                excel_row,
+                row,
                 2,
                 temperature,
                 temperature_format
             )
 
 
-        # =====================================================
-        # COLUMN WIDTH
-        # =====================================================
+        # =================================================
+        # WIDTH
+        # =================================================
 
         worksheet.set_column(
             "A:A",
@@ -617,13 +723,9 @@ def create_excel():
 
         worksheet.set_column(
             "F:F",
-            25
+            24
         )
 
-
-        # =====================================================
-        # FREEZE
-        # =====================================================
 
         worksheet.freeze_panes(
             3,
@@ -631,11 +733,10 @@ def create_excel():
         )
 
 
-        # =====================================================
+        # =================================================
         # TABLE + CHART
-        # =====================================================
+        # =================================================
 
-        # فقط اگر واقعاً رکورد داریم
         if rows:
 
             last_row = (
@@ -675,13 +776,10 @@ def create_excel():
             )
 
 
-            # -------------------------------------------------
-            # CHART
-            # -------------------------------------------------
-
             chart = workbook.add_chart(
                 {
-                    "type": "line"
+                    "type":
+                        "line"
                 }
             )
 
@@ -770,9 +868,9 @@ def create_excel():
             )
 
 
-        # =====================================================
-        # REPORT INFO
-        # =====================================================
+        # =================================================
+        # INFO
+        # =================================================
 
         now = current_time()
 
@@ -782,6 +880,7 @@ def create_excel():
             "Generated",
             info_format
         )
+
 
         worksheet.write(
             "F1",
@@ -797,6 +896,7 @@ def create_excel():
             info_format
         )
 
+
         worksheet.write(
             "F2",
             "Asia/Tehran"
@@ -808,6 +908,7 @@ def create_excel():
             "Samples",
             info_format
         )
+
 
         worksheet.write(
             "F3",
@@ -843,6 +944,7 @@ def save_temperature(
 
     initialize_csv()
 
+
     now = current_time()
 
 
@@ -858,6 +960,7 @@ def save_temperature(
             writer = csv.writer(
                 file
             )
+
 
             writer.writerow(
                 [
@@ -902,7 +1005,6 @@ def save_temperature(
         )
 
 
-        # Excel بلافاصله به‌روز می‌شود
         create_excel()
 
 
@@ -941,7 +1043,8 @@ def on_connect(
     )
 
     print(
-        f"Reason code: {reason_code}"
+        f"Reason code: "
+        f"{reason_code}"
     )
 
     print(
@@ -967,19 +1070,16 @@ def on_connect(
                 f"{MQTT_TOPIC}"
             )
 
+
         else:
 
             print(
-                f"Subscribe failed: "
-                f"{result}"
+                "MQTT subscribe failed:"
             )
 
-
-    else:
-
-        print(
-            "MQTT connection failed."
-        )
+            print(
+                result
+            )
 
 
 # =========================================================
@@ -1059,6 +1159,7 @@ def on_message(
             .strip()
         )
 
+
     except Exception as e:
 
         print(
@@ -1080,11 +1181,13 @@ def on_message(
     )
 
     print(
-        f"Topic: {message.topic}"
+        f"Topic: "
+        f"{message.topic}"
     )
 
     print(
-        f"Message: {payload}"
+        f"Message: "
+        f"{payload}"
     )
 
     print(
@@ -1093,7 +1196,7 @@ def on_message(
 
 
     # =====================================================
-    # TEMPERATURE
+    # TEMP
     # =====================================================
 
     if payload.startswith(
@@ -1103,13 +1206,16 @@ def on_message(
         try:
 
             temperature = float(
-                payload[5:].strip()
+                payload[
+                    5:
+                ].strip()
             )
 
 
             latest_temperature = (
                 temperature
             )
+
 
             latest_temperature_time = (
                 current_time()
@@ -1135,11 +1241,7 @@ def on_message(
         except ValueError:
 
             print(
-                "Invalid temperature:"
-            )
-
-            print(
-                payload
+                "Invalid TEMP value."
             )
 
 
@@ -1153,7 +1255,7 @@ def on_message(
     if payload == "TEMP_ERROR":
 
         print(
-            "DS18B20 error received."
+            "DS18B20 sensor error."
         )
 
 
@@ -1173,6 +1275,7 @@ def on_message(
 
 mqtt_client = mqtt.Client(
     mqtt.CallbackAPIVersion.VERSION2,
+
     client_id=(
         "Telegram_Render_"
         + uuid.uuid4().hex[:12]
@@ -1236,7 +1339,7 @@ def connect_mqtt():
     except Exception as e:
 
         print(
-            "MQTT start error:"
+            "MQTT startup error:"
         )
 
         print(e)
@@ -1269,7 +1372,9 @@ async def request_temperature():
         )
 
 
-        future = loop.create_future()
+        future = (
+            loop.create_future()
+        )
 
 
         pending_temperature_future = (
@@ -1399,8 +1504,7 @@ async def automatic_datalogger():
             else:
 
                 print(
-                    "No fresh temperature "
-                    "received."
+                    "No fresh temperature received."
                 )
 
 
@@ -1423,7 +1527,27 @@ async def automatic_datalogger():
 
 
 # =========================================================
-# START MESSAGE
+# SEND LOGIN PAGE
+# =========================================================
+
+async def send_login_page(
+    message
+):
+
+    await message.reply_text(
+
+        "🔐 ورود به سیستم\n\n"
+
+        "برای استفاده از ربات ابتدا وارد شوید.\n\n"
+
+        "برای شروع روی دکمه زیر بزنید.",
+
+        reply_markup=login_menu()
+    )
+
+
+# =========================================================
+# START COMMAND
 # =========================================================
 
 async def start_command(
@@ -1434,125 +1558,301 @@ async def start_command(
     if not update.effective_chat:
         return
 
+
     if not update.message:
         return
 
 
-    if not is_allowed(update):
+    chat_id = (
+        update.effective_chat.id
+    )
+
+
+    # اگر قبلاً وارد شده
+    if is_authenticated(
+        chat_id
+    ):
+
+        now = current_time()
+
 
         await update.message.reply_text(
 
-            "⛔ شما اجازه استفاده از "
-            "این ربات را ندارید."
+            "🤖 ESP32 CONTROL BOT\n\n"
+
+            f"🕐 "
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+
+            "🌍 Asia/Tehran\n\n"
+
+            "✅ وضعیت ورود: فعال\n\n"
+
+            "لطفاً یک گزینه را انتخاب کنید.",
+
+            reply_markup=main_menu()
         )
 
         return
 
 
-    # حذف Reply Keyboard قبلی اگر وجود داشته باشد
-    await update.message.reply_text(
-        "✅ منوی جدید فعال شد.",
-        reply_markup=ReplyKeyboardRemove()
+    clear_login_state(
+        chat_id
     )
 
 
-    now = current_time()
-
-
-    mqtt_status = (
-        "🟢 متصل"
-        if mqtt_client.is_connected()
-        else "🔴 قطع"
+    await send_login_page(
+        update.message
     )
 
 
-    if latest_temperature is None:
+# =========================================================
+# HANDLE USER LOGIN TEXT
+# =========================================================
 
-        temp_status = (
-            "❌ هنوز دریافت نشده"
+async def handle_login_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not update.effective_chat:
+        return
+
+
+    if not update.message:
+        return
+
+
+    chat_id = (
+        update.effective_chat.id
+    )
+
+
+    step = login_steps.get(
+        chat_id
+    )
+
+
+    # =====================================================
+    # USERNAME
+    # =====================================================
+
+    if step == "username":
+
+        username = (
+            update.message.text
+            .strip()
         )
 
-    else:
 
-        temp_status = (
-            f"🌡️ "
-            f"{latest_temperature:.2f} °C"
+        if username != LOGIN_USERNAME:
+
+            attempts = (
+                login_attempts.get(
+                    chat_id,
+                    0
+                )
+                + 1
+            )
+
+
+            login_attempts[
+                chat_id
+            ] = attempts
+
+
+            if attempts >= MAX_LOGIN_ATTEMPTS:
+
+                login_locked_until[
+                    chat_id
+                ] = (
+                    current_time()
+                    + timedelta(
+                        seconds=LOGIN_LOCK_SECONDS
+                    )
+                )
+
+
+                clear_login_state(
+                    chat_id
+                )
+
+
+                login_attempts[
+                    chat_id
+                ] = 0
+
+
+                await update.message.reply_text(
+
+                    "🔒 ورود موقتاً قفل شد.\n\n"
+
+                    f"⏱️ لطفاً "
+                    f"{LOGIN_LOCK_SECONDS} "
+                    "ثانیه دیگر تلاش کنید."
+                )
+
+                return
+
+
+            remaining = (
+                MAX_LOGIN_ATTEMPTS
+                - attempts
+            )
+
+
+            await update.message.reply_text(
+
+                "❌ نام کاربری اشتباه است.\n\n"
+
+                f"تعداد تلاش باقی‌مانده: "
+                f"{remaining}"
+            )
+
+            return
+
+
+        login_steps[
+            chat_id
+        ] = "password"
+
+
+        await update.message.reply_text(
+
+            "✅ نام کاربری صحیح است.\n\n"
+
+            "🔑 لطفاً رمز عبور را وارد کنید:"
+        )
+
+        return
+
+
+    # =====================================================
+    # PASSWORD
+    # =====================================================
+
+    if step == "password":
+
+        password = (
+            update.message.text
+            .strip()
         )
 
 
-    if (
-        temperature_logger_task
-        and
-        not temperature_logger_task.done()
-    ):
+        if password != LOGIN_PASSWORD:
 
-        datalogger_status = (
-            "🟢 فعال"
+            attempts = (
+                login_attempts.get(
+                    chat_id,
+                    0
+                )
+                + 1
+            )
+
+
+            login_attempts[
+                chat_id
+            ] = attempts
+
+
+            if attempts >= MAX_LOGIN_ATTEMPTS:
+
+                login_locked_until[
+                    chat_id
+                ] = (
+                    current_time()
+                    + timedelta(
+                        seconds=LOGIN_LOCK_SECONDS
+                    )
+                )
+
+
+                clear_login_state(
+                    chat_id
+                )
+
+
+                login_attempts[
+                    chat_id
+                ] = 0
+
+
+                await update.message.reply_text(
+
+                    "🔒 ورود موقتاً قفل شد.\n\n"
+
+                    f"⏱️ لطفاً "
+                    f"{LOGIN_LOCK_SECONDS} "
+                    "ثانیه دیگر تلاش کنید."
+                )
+
+                return
+
+
+            remaining = (
+                MAX_LOGIN_ATTEMPTS
+                - attempts
+            )
+
+
+            await update.message.reply_text(
+
+                "❌ رمز عبور اشتباه است.\n\n"
+
+                f"تعداد تلاش باقی‌مانده: "
+                f"{remaining}"
+            )
+
+            return
+
+
+        # =================================================
+        # SUCCESS
+        # =================================================
+
+        authenticated_users.add(
+            chat_id
         )
 
-    else:
 
-        datalogger_status = (
-            "🔴 غیرفعال"
+        login_attempts.pop(
+            chat_id,
+            None
         )
 
 
-    continuous_status = (
-
-        "🟢 فعال"
-
-        if update.effective_chat.id
-        in continuous_tasks
-
-        else
-        "🔴 غیرفعال"
-    )
+        login_locked_until.pop(
+            chat_id,
+            None
+        )
 
 
-    text = (
-
-        "🤖 ESP32 CONTROL BOT\n\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n"
-
-        "🕐 اطلاعات زمان\n\n"
-
-        f"📅 تاریخ: "
-        f"{now.strftime('%Y-%m-%d')}\n"
-
-        f"⏰ ساعت: "
-        f"{now.strftime('%H:%M:%S')}\n"
-
-        "🌍 منطقه زمانی: "
-        "Asia/Tehran\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n"
-
-        "📡 وضعیت سیستم\n\n"
-
-        f"MQTT: "
-        f"{mqtt_status}\n"
-
-        f"{temp_status}\n"
-
-        f"📊 دیتالاگر: "
-        f"{datalogger_status}\n"
-
-        f"📡 گزارش مستمر: "
-        f"{continuous_status}\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-
-        "یک گزینه را انتخاب کنید:"
-    )
+        clear_login_state(
+            chat_id
+        )
 
 
-    await update.message.reply_text(
+        now = current_time()
 
-        text,
 
-        reply_markup=main_menu()
-    )
+        await update.message.reply_text(
+
+            "✅ ورود موفق بود.\n\n"
+
+            "🤖 سیستم کنترل ESP32\n"
+
+            f"🕐 "
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+
+            "🌍 Asia/Tehran\n\n"
+
+            "به سیستم خوش آمدید.\n"
+
+            "لطفاً یک گزینه را انتخاب کنید.",
+
+            reply_markup=main_menu()
+        )
+
+        return
 
 
 # =========================================================
@@ -1564,7 +1864,9 @@ async def callback_handler(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    query = update.callback_query
+    query = (
+        update.callback_query
+    )
 
 
     if query is None:
@@ -1574,21 +1876,12 @@ async def callback_handler(
     await query.answer()
 
 
-    if not is_allowed(update):
-
-        await query.answer(
-            "⛔ دسترسی ندارید.",
-            show_alert=True
-        )
-
-        return
-
-
-    data = query.data
-
     chat_id = (
         query.from_user.id
     )
+
+
+    data = query.data
 
 
     print()
@@ -1610,31 +1903,121 @@ async def callback_handler(
 
 
     # =====================================================
+    # LOGIN START
+    # =====================================================
+
+    if data == "login_start":
+
+        login_steps[
+            chat_id
+        ] = "username"
+
+
+        login_attempts[
+            chat_id
+        ] = 0
+
+
+        await query.edit_message_text(
+
+            "🔐 ورود به سیستم\n\n"
+
+            "👤 نام کاربری را وارد کنید:"
+        )
+
+        return
+
+
+    # =====================================================
+    # LOCK CHECK
+    # =====================================================
+
+    locked_until = (
+        login_locked_until.get(
+            chat_id
+        )
+    )
+
+
+    if locked_until:
+
+        if current_time() < locked_until:
+
+            remaining = int(
+                (
+                    locked_until
+                    - current_time()
+                ).total_seconds()
+            )
+
+
+            await query.answer(
+
+                f"🔒 ورود قفل است. "
+                f"{remaining + 1} ثانیه باقی مانده.",
+
+                show_alert=True
+            )
+
+            return
+
+
+        login_locked_until.pop(
+            chat_id,
+            None
+        )
+
+
+    # =====================================================
+    # AUTHENTICATION REQUIRED
+    # =====================================================
+
+    if data not in (
+        "close",
+    ) and not is_authenticated(
+        chat_id
+    ):
+
+        await query.answer(
+
+            "🔐 ابتدا وارد سیستم شوید.",
+
+            show_alert=True
+        )
+
+
+        await query.edit_message_text(
+
+            "🔐 برای استفاده از سیستم "
+            "ابتدا وارد شوید.",
+
+            reply_markup=login_menu()
+        )
+
+        return
+
+
+    # =====================================================
     # HOME
     # =====================================================
 
     if data == "home":
-
-        waiting_for_interval.discard(
-            chat_id
-        )
-
 
         now = current_time()
 
 
         await query.edit_message_text(
 
-            (
-                "🤖 ESP32 CONTROL BOT\n\n"
+            "🤖 ESP32 CONTROL BOT\n\n"
 
-                f"🕐 "
-                f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"🕐 "
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
 
-                "🌍 Asia/Tehran\n\n"
+            "🌍 Asia/Tehran\n\n"
 
-                "لطفاً یکی از گزینه‌ها را انتخاب کنید:"
-            ),
+            "✅ ورود فعال است.\n\n"
+
+            "یک گزینه را انتخاب کنید:",
 
             reply_markup=main_menu()
         )
@@ -1648,18 +2031,68 @@ async def callback_handler(
 
     if data == "close":
 
-        waiting_for_interval.discard(
+        await query.edit_message_text(
+
+            "✅ منو بسته شد.\n\n"
+
+            "برای باز کردن دوباره:\n"
+            "/start",
+
+            reply_markup=None
+        )
+
+        return
+
+
+    # =====================================================
+    # LOGOUT
+    # =====================================================
+
+    if data == "logout":
+
+        # توقف گزارش مستمر کاربر
+        task = continuous_tasks.pop(
+            chat_id,
+            None
+        )
+
+
+        if task:
+
+            task.cancel()
+
+
+        logout_user(
             chat_id
         )
 
 
         await query.edit_message_text(
 
-            "✅ منو بسته شد.\n\n"
-            "برای باز کردن دوباره، "
-            "/start را ارسال کنید.",
+            "🚪 از حساب خارج شدید.\n\n"
 
-            reply_markup=None
+            "برای ورود مجدد روی "
+            "دکمه زیر بزنید.",
+
+            reply_markup=login_menu()
+        )
+
+        return
+
+
+    # =====================================================
+    # LED MENU
+    # =====================================================
+
+    if data == "led_menu":
+
+        await query.edit_message_text(
+
+            "💡 کنترل LED\n\n"
+
+            "وضعیت موردنظر را انتخاب کنید:",
+
+            reply_markup=led_menu()
         )
 
         return
@@ -1674,7 +2107,9 @@ async def callback_handler(
         if not mqtt_client.is_connected():
 
             await query.answer(
+
                 "❌ MQTT متصل نیست.",
+
                 show_alert=True
             )
 
@@ -1703,19 +2138,25 @@ async def callback_handler(
                 show_alert=True
             )
 
+
             await query.edit_message_text(
 
-                "🟢 LED روشن است\n\n"
+                "💡 کنترل LED\n\n"
+
+                "🟢 وضعیت LED: روشن\n\n"
+
                 "فرمان با موفقیت ارسال شد.",
 
-                reply_markup=main_menu()
+                reply_markup=led_menu()
             )
 
 
         else:
 
             await query.answer(
+
                 "❌ ارسال فرمان انجام نشد.",
+
                 show_alert=True
             )
 
@@ -1731,7 +2172,9 @@ async def callback_handler(
         if not mqtt_client.is_connected():
 
             await query.answer(
+
                 "❌ MQTT متصل نیست.",
+
                 show_alert=True
             )
 
@@ -1760,19 +2203,25 @@ async def callback_handler(
                 show_alert=True
             )
 
+
             await query.edit_message_text(
 
-                "🔴 LED خاموش است\n\n"
+                "💡 کنترل LED\n\n"
+
+                "🔴 وضعیت LED: خاموش\n\n"
+
                 "فرمان با موفقیت ارسال شد.",
 
-                reply_markup=main_menu()
+                reply_markup=led_menu()
             )
 
 
         else:
 
             await query.answer(
+
                 "❌ ارسال فرمان انجام نشد.",
+
                 show_alert=True
             )
 
@@ -1787,8 +2236,9 @@ async def callback_handler(
 
         await query.edit_message_text(
 
-            "⏳ در حال دریافت دمای جدید...\n\n"
-            "در حال ارتباط با ESP32",
+            "🌡️ دمای فعلی\n\n"
+
+            "⏳ در حال دریافت دمای جدید از ESP32...",
 
             reply_markup=back_menu()
         )
@@ -1805,7 +2255,7 @@ async def callback_handler(
 
                 "❌ دریافت دمای جدید از ESP32 انجام نشد.\n\n"
 
-                "ESP32 و MQTT را بررسی کنید.",
+                "اتصال ESP32 و MQTT را بررسی کنید.",
 
                 reply_markup=back_menu()
             )
@@ -1856,12 +2306,17 @@ async def callback_handler(
                 ) as file:
 
                     sample_count = max(
+
                         0,
+
                         sum(
                             1
-                            for _ in file
-                        ) - 1
+                            for _
+                            in file
+                        )
+                        - 1
                     )
+
 
             except Exception:
 
@@ -1875,13 +2330,13 @@ async def callback_handler(
             f"⏱️ ثبت خودکار: "
             f"هر {DATALOG_INTERVAL} ثانیه\n"
 
+            f"📝 رکوردها: "
+            f"{sample_count}\n"
+
             f"📁 فایل: "
-            f"{EXCEL_FILE}\n"
+            f"{EXCEL_FILE}\n\n"
 
-            f"📝 تعداد رکوردها: "
-            f"{sample_count}\n\n"
-
-            "از گزینه زیر فایل Excel را دریافت کنید.",
+            "از گزینه زیر فایل را دریافت کنید.",
 
             reply_markup=datalogger_menu()
         )
@@ -1940,7 +2395,7 @@ async def callback_handler(
 
                         "🕐 زمان: Asia/Tehran\n"
 
-                        "📈 شامل نمودار دما و زمان"
+                        "📈 همراه با نمودار"
                     )
                 )
 
@@ -1973,39 +2428,47 @@ async def callback_handler(
 
 
     # =====================================================
-    # CONTINUOUS MENU
+    # CONTINUOUS
     # =====================================================
 
     if data == "continuous":
 
-        if chat_id in continuous_tasks:
+        active = (
+            chat_id in continuous_tasks
+        )
 
-            await query.edit_message_text(
 
-                "📡 گزارش مستمر دما در حال اجراست.\n\n"
+        if active:
 
-                "می‌توانید آن را متوقف کنید یا "
-                "به منوی اصلی برگردید.",
+            message = (
 
-                reply_markup=continuous_menu()
+                "📡 گزارش مستمر فعال است.\n\n"
+
+                "برای تغییر بازه، گزینه جدید را انتخاب کنید."
             )
 
         else:
 
-            await query.edit_message_text(
+            message = (
 
                 "📡 گزارش مستمر دما\n\n"
 
-                "فاصله زمانی ارسال را انتخاب کنید:",
-
-                reply_markup=continuous_menu()
+                "فاصله ارسال را انتخاب کنید:"
             )
+
+
+        await query.edit_message_text(
+
+            message,
+
+            reply_markup=continuous_menu()
+        )
 
         return
 
 
     # =====================================================
-    # PREDEFINED INTERVAL
+    # INTERVAL
     # =====================================================
 
     if data.startswith(
@@ -2021,19 +2484,24 @@ async def callback_handler(
                 )[1]
             )
 
+
         except Exception:
 
             await query.answer(
-                "❌ فاصله نامعتبر است.",
+
+                "❌ مقدار نامعتبر است.",
+
                 show_alert=True
             )
 
             return
 
 
-        old_task = continuous_tasks.pop(
-            chat_id,
-            None
+        old_task = (
+            continuous_tasks.pop(
+                chat_id,
+                None
+            )
         )
 
 
@@ -2042,7 +2510,9 @@ async def callback_handler(
             old_task.cancel()
 
 
-        task = asyncio.create_task(
+        continuous_tasks[
+            chat_id
+        ] = asyncio.create_task(
 
             continuous_temperature_report(
 
@@ -2053,19 +2523,14 @@ async def callback_handler(
         )
 
 
-        continuous_tasks[
-            chat_id
-        ] = task
-
-
         await query.edit_message_text(
 
             "✅ گزارش مستمر فعال شد.\n\n"
 
-            f"⏱️ فاصله ارسال: "
-            f"{interval:g} ثانیه\n\n"
+            f"⏱️ هر {interval:g} ثانیه\n\n"
 
-            "برای توقف یا برگشت از دکمه‌های زیر استفاده کنید.",
+            "گزارش‌های دما به‌صورت خودکار "
+            "ارسال خواهند شد.",
 
             reply_markup=continuous_menu()
         )
@@ -2079,17 +2544,17 @@ async def callback_handler(
 
     if data == "custom_interval":
 
-        waiting_for_interval.add(
+        login_steps[
             chat_id
-        )
+        ] = "custom_interval"
 
 
         await query.edit_message_text(
 
             "✏️ زمان دلخواه\n\n"
 
-            "لطفاً فاصله ارسال را بر حسب ثانیه "
-            "به‌صورت عدد ارسال کنید.\n\n"
+            "فاصله ارسال را بر حسب ثانیه "
+            "ارسال کنید.\n\n"
 
             "مثال:\n"
             "15\n"
@@ -2108,11 +2573,6 @@ async def callback_handler(
 
     if data == "stop_continuous":
 
-        waiting_for_interval.discard(
-            chat_id
-        )
-
-
         task = continuous_tasks.pop(
             chat_id,
             None
@@ -2126,18 +2586,19 @@ async def callback_handler(
 
             await query.edit_message_text(
 
-                "⛔ گزارش مستمر دما متوقف شد.",
+                "⛔ گزارش مستمر متوقف شد.",
 
-                reply_markup=main_menu()
+                reply_markup=continuous_menu()
             )
+
 
         else:
 
             await query.edit_message_text(
 
-                "ℹ️ گزارش مستمر دما فعال نیست.",
+                "ℹ️ گزارش مستمر فعال نیست.",
 
-                reply_markup=main_menu()
+                reply_markup=continuous_menu()
             )
 
         return
@@ -2153,26 +2614,29 @@ async def callback_handler(
 
 
         mqtt_status = (
+
             "🟢 متصل"
+
             if mqtt_client.is_connected()
+
             else "🔴 قطع"
         )
 
 
         if latest_temperature is None:
 
-            temp_status = (
+            temperature_text = (
                 "❌ دریافت نشده"
             )
 
         else:
 
-            temp_status = (
+            temperature_text = (
                 f"{latest_temperature:.2f} °C"
             )
 
 
-        datalogger_status = (
+        logger_status = (
 
             "🟢 فعال"
 
@@ -2182,8 +2646,17 @@ async def callback_handler(
                 not temperature_logger_task.done()
             )
 
-            else
-            "🔴 غیرفعال"
+            else "🔴 غیرفعال"
+        )
+
+
+        continuous_status = (
+
+            "🟢 فعال"
+
+            if chat_id in continuous_tasks
+
+            else "🔴 غیرفعال"
         )
 
 
@@ -2195,26 +2668,343 @@ async def callback_handler(
             f"{mqtt_status}\n"
 
             f"🌡️ دما: "
-            f"{temp_status}\n"
+            f"{temperature_text}\n"
 
             f"📊 دیتالاگر: "
-            f"{datalogger_status}\n"
+            f"{logger_status}\n"
+
+            f"📡 گزارش مستمر: "
+            f"{continuous_status}\n\n"
 
             f"⏱️ ثبت خودکار: "
-            f"هر {DATALOG_INTERVAL} ثانیه\n\n"
+            f"هر {DATALOG_INTERVAL} ثانیه\n"
 
             f"🕐 زمان:\n"
             f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
 
             "🌍 Asia/Tehran\n\n"
 
-            f"📁 فایل:\n"
-            f"{EXCEL_FILE}",
+            "ESP32:\n"
+            "GPIO2 = LED\n"
+            "GPIO23 = DS18B20",
 
             reply_markup=back_menu()
         )
 
         return
+
+
+# =========================================================
+# TEXT MESSAGE
+# =========================================================
+
+async def handle_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not update.effective_chat:
+        return
+
+    if not update.message:
+        return
+
+
+    chat_id = (
+        update.effective_chat.id
+    )
+
+
+    text = (
+        update.message.text.strip()
+    )
+
+
+    print()
+    print(
+        "--------------------------------------"
+    )
+
+    print(
+        f"Chat ID: {chat_id}"
+    )
+
+    print(
+        f"Message: {text}"
+    )
+
+    print(
+        "--------------------------------------"
+    )
+
+
+    # =====================================================
+    # LOGIN LOCK
+    # =====================================================
+
+    locked_until = (
+        login_locked_until.get(
+            chat_id
+        )
+    )
+
+
+    if locked_until:
+
+        if current_time() < locked_until:
+
+            remaining = int(
+                (
+                    locked_until
+                    - current_time()
+                ).total_seconds()
+            )
+
+
+            await update.message.reply_text(
+
+                f"🔒 ورود قفل است.\n\n"
+                f"{remaining + 1} ثانیه دیگر تلاش کنید."
+            )
+
+            return
+
+
+        login_locked_until.pop(
+            chat_id,
+            None
+        )
+
+
+    # =====================================================
+    # LOGIN INPUT
+    # =====================================================
+
+    if chat_id in login_steps:
+
+        step = login_steps.get(
+            chat_id
+        )
+
+
+        if step in (
+            "username",
+            "password"
+        ):
+
+            await handle_login_text(
+                update,
+                context
+            )
+
+            return
+
+
+        # =================================================
+        # CUSTOM INTERVAL
+        # =================================================
+
+        if step == "custom_interval":
+
+            if not is_authenticated(
+                chat_id
+            ):
+
+                clear_login_state(
+                    chat_id
+                )
+
+                await update.message.reply_text(
+
+                    "🔐 ابتدا وارد سیستم شوید.",
+                    
+                )
+
+                return
+
+
+            try:
+
+                interval = float(
+                    text
+                )
+
+
+                if interval < 1:
+
+                    raise ValueError
+
+
+                if interval > 86400:
+
+                    await update.message.reply_text(
+
+                        "❌ حداکثر فاصله "
+                        "86400 ثانیه است."
+                    )
+
+                    return
+
+
+                clear_login_state(
+                    chat_id
+                )
+
+
+                old_task = (
+                    continuous_tasks.pop(
+                        chat_id,
+                        None
+                    )
+                )
+
+
+                if old_task:
+
+                    old_task.cancel()
+
+
+                continuous_tasks[
+                    chat_id
+                ] = asyncio.create_task(
+
+                    continuous_temperature_report(
+
+                        chat_id,
+
+                        interval
+                    )
+                )
+
+
+                await update.message.reply_text(
+
+                    "✅ گزارش مستمر فعال شد.\n\n"
+
+                    f"⏱️ هر "
+                    f"{interval:g} ثانیه",
+
+                    reply_markup=main_menu()
+                )
+
+
+            except ValueError:
+
+                await update.message.reply_text(
+
+                    "❌ لطفاً فقط یک عدد معتبر "
+                    "بر حسب ثانیه وارد کنید."
+                )
+
+
+            return
+
+
+    # =====================================================
+    # IF NOT LOGIN
+    # =====================================================
+
+    if not is_authenticated(
+        chat_id
+    ):
+
+        await update.message.reply_text(
+
+            "🔐 برای استفاده از ربات ابتدا وارد شوید.\n\n"
+            "دستور /start را ارسال کنید."
+        )
+
+        return
+
+
+    # =====================================================
+    # LEGACY TEXT COMMANDS
+    # =====================================================
+
+    if text.lower() == "led on":
+
+        result = mqtt_client.publish(
+
+            MQTT_TOPIC,
+
+            "ON",
+
+            qos=1,
+
+            retain=False
+        )
+
+
+        await update.message.reply_text(
+
+            "🟢 LED روشن شد"
+            if result.rc
+            == mqtt.MQTT_ERR_SUCCESS
+
+            else
+            "❌ ارسال فرمان انجام نشد.",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+    if text.lower() == "led off":
+
+        result = mqtt_client.publish(
+
+            MQTT_TOPIC,
+
+            "OFF",
+
+            qos=1,
+
+            retain=False
+        )
+
+
+        await update.message.reply_text(
+
+            "🔴 LED خاموش شد"
+            if result.rc
+            == mqtt.MQTT_ERR_SUCCESS
+
+            else
+            "❌ ارسال فرمان انجام نشد.",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+    if text.lower() in (
+        "status",
+        "وضعیت"
+    ):
+
+        await update.message.reply_text(
+
+            "لطفاً از منوی ربات استفاده کنید.",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+    # =====================================================
+    # UNKNOWN
+    # =====================================================
+
+    await update.message.reply_text(
+
+        "ℹ️ برای استفاده از امکانات "
+        "از منوی ربات استفاده کنید.",
+
+        reply_markup=main_menu()
+    )
 
 
 # =========================================================
@@ -2251,7 +3041,8 @@ async def continuous_temperature_report(
     try:
 
         while (
-            chat_id in continuous_tasks
+            chat_id
+            in continuous_tasks
         ):
 
             temperature = (
@@ -2266,26 +3057,28 @@ async def continuous_temperature_report(
                     chat_id=chat_id,
 
                     text=(
-
                         "⚠️ دریافت دمای جدید "
                         "از ESP32 انجام نشد."
                     )
                 )
+
 
             else:
 
                 now = current_time()
 
 
-                stop_keyboard = InlineKeyboardMarkup(
-                    [
+                stop_keyboard = (
+                    InlineKeyboardMarkup(
                         [
-                            InlineKeyboardButton(
-                                "⛔ توقف گزارش",
-                                callback_data="stop_continuous"
-                            ),
+                            [
+                                InlineKeyboardButton(
+                                    "⛔ توقف گزارش",
+                                    callback_data="stop_continuous"
+                                )
+                            ]
                         ]
-                    ]
+                    )
                 )
 
 
@@ -2319,8 +3112,8 @@ async def continuous_temperature_report(
     except asyncio.CancelledError:
 
         print(
-            f"Continuous report "
-            f"cancelled: {chat_id}"
+            f"Continuous report cancelled: "
+            f"{chat_id}"
         )
 
 
@@ -2342,159 +3135,6 @@ async def continuous_temperature_report(
 
 
 # =========================================================
-# TEXT HANDLER
-# =========================================================
-
-async def handle_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if not update.effective_chat:
-        return
-
-    if not update.message:
-        return
-
-
-    if not is_allowed(update):
-
-        await update.message.reply_text(
-
-            "⛔ شما اجازه استفاده "
-            "از این ربات را ندارید."
-        )
-
-        return
-
-
-    chat_id = (
-        update.effective_chat.id
-    )
-
-
-    text = (
-        update.message.text.strip()
-    )
-
-
-    print()
-    print(
-        "--------------------------------------"
-    )
-
-    print(
-        f"Chat ID: {chat_id}"
-    )
-
-    print(
-        f"Message: {text}"
-    )
-
-    print(
-        "--------------------------------------"
-    )
-
-
-    # =====================================================
-    # CUSTOM INTERVAL INPUT
-    # =====================================================
-
-    if chat_id in waiting_for_interval:
-
-        try:
-
-            interval = float(
-                text
-            )
-
-
-            if interval < 1:
-
-                raise ValueError
-
-
-            if interval > 86400:
-
-                await update.message.reply_text(
-
-                    "❌ حداکثر فاصله "
-                    "86400 ثانیه است."
-                )
-
-                return
-
-
-            waiting_for_interval.discard(
-                chat_id
-            )
-
-
-            old_task = (
-                continuous_tasks.pop(
-                    chat_id,
-                    None
-                )
-            )
-
-
-            if old_task:
-
-                old_task.cancel()
-
-
-            continuous_tasks[
-                chat_id
-            ] = asyncio.create_task(
-
-                continuous_temperature_report(
-
-                    chat_id,
-
-                    interval
-                )
-            )
-
-
-            await update.message.reply_text(
-
-                "✅ گزارش مستمر فعال شد.\n\n"
-
-                f"⏱️ فاصله: "
-                f"{interval:g} ثانیه",
-
-                reply_markup=main_menu()
-            )
-
-
-        except ValueError:
-
-            await update.message.reply_text(
-
-                "❌ لطفاً فقط یک عدد معتبر "
-                "بر حسب ثانیه ارسال کنید.\n\n"
-
-                "مثلاً: 10"
-            )
-
-
-        return
-
-
-    # =====================================================
-    # FALLBACK
-    # =====================================================
-
-    await update.message.reply_text(
-
-        "ℹ️ برای استفاده از ربات "
-        "دکمه /start را بزنید.",
-
-        reply_markup=main_menu()
-    )
-
-
-# =========================================================
 # ROOT
 # =========================================================
 
@@ -2502,8 +3142,12 @@ async def handle_message(
 async def root():
 
     return {
-        "status": "online",
-        "service": "Telegram ESP32 Bot"
+
+        "status":
+            "online",
+
+        "service":
+            "Telegram ESP32 Bot"
     }
 
 
@@ -2543,6 +3187,7 @@ async def telegram_webhook(
         print(
             "Invalid webhook secret."
         )
+
 
         raise HTTPException(
             status_code=401,
@@ -2658,7 +3303,7 @@ async def startup_event():
 
 
     # =====================================================
-    # COMMANDS
+    # HANDLERS
     # =====================================================
 
     telegram_app.add_handler(
@@ -2670,10 +3315,6 @@ async def startup_event():
     )
 
 
-    # =====================================================
-    # INLINE CALLBACKS
-    # =====================================================
-
     telegram_app.add_handler(
 
         CallbackQueryHandler(
@@ -2682,17 +3323,11 @@ async def startup_event():
     )
 
 
-    # =====================================================
-    # TEXT
-    # =====================================================
-
     telegram_app.add_handler(
 
         MessageHandler(
-
             filters.TEXT
             & ~filters.COMMAND,
-
             handle_message
         )
     )
@@ -2708,7 +3343,7 @@ async def startup_event():
 
 
     # =====================================================
-    # AUTOMATIC LOGGER
+    # LOGGER
     # =====================================================
 
     temperature_logger_task = (
@@ -2733,7 +3368,6 @@ async def startup_event():
         "Setting Telegram webhook..."
     )
 
-
     print(
         webhook_url
     )
@@ -2750,7 +3384,7 @@ async def startup_event():
 
 
     # =====================================================
-    # TIME DEBUG
+    # TIME CHECK
     # =====================================================
 
     now = current_time()
@@ -2761,13 +3395,11 @@ async def startup_event():
         "Current local time:"
     )
 
-
     print(
         now.strftime(
             "%Y-%m-%d %H:%M:%S"
         )
     )
-
 
     print(
         "Timezone: Asia/Tehran"
@@ -2781,6 +3413,10 @@ async def startup_event():
 
     print(
         "Bot is ready."
+    )
+
+    print(
+        "Login system: ACTIVE"
     )
 
     print(
@@ -2814,7 +3450,7 @@ async def shutdown_event():
 
 
     # =====================================================
-    # LOGGER
+    # DATALOGGER
     # =====================================================
 
     if temperature_logger_task:
@@ -2847,7 +3483,18 @@ async def shutdown_event():
 
     continuous_tasks.clear()
 
-    waiting_for_interval.clear()
+
+    # =====================================================
+    # LOGIN STATES
+    # =====================================================
+
+    authenticated_users.clear()
+
+    login_steps.clear()
+
+    login_attempts.clear()
+
+    login_locked_until.clear()
 
 
     # =====================================================
@@ -2882,5 +3529,6 @@ if __name__ == "__main__":
 
         host="0.0.0.0",
 
-        port=PORT
+        port=PORT,
     )
+
