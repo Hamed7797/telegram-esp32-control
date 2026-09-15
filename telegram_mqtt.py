@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # TELEGRAM
 # =========================================================
 
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
+TELEGRAM_BOT_TOKEN = "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
 
 ALLOWED_CHAT_ID = "0"
 
@@ -58,7 +58,7 @@ MQTT_PORT = 8883
 
 MQTT_USERNAME = "hamed_esp32"
 
-MQTT_PASSWORD = "YOUR_MQTT_PASSWORD"
+MQTT_PASSWORD = "Ha00102030meD@"
 
 # =========================================================
 # فقط یک Topic
