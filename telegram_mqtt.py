@@ -41,7 +41,9 @@ logger = logging.getLogger(__name__)
 # TELEGRAM
 # =========================================================
 
-TELEGRAM_BOT_TOKEN = "YOUR_NEW_BOT_TOKEN"
+TELEGRAM_BOT_TOKEN = (
+    "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
+)
 
 # فعلاً 0 یعنی همه کاربران مجاز هستند
 ALLOWED_CHAT_ID = "0"
@@ -51,11 +53,14 @@ ALLOWED_CHAT_ID = "0"
 # HIVEMQ
 # =========================================================
 
-MQTT_HOST = "c8f63357997a47a8b37f0495aac24c7d.s1.eu.hivemq.cloud"
+MQTT_HOST = (
+    "c8f63357997a47a8b37f0495aac24c7d.s1.eu.hivemq.cloud"
+)
+
 MQTT_PORT = 8883
 
 MQTT_USERNAME = "hamed_esp32"
-MQTT_PASSWORD = "YOUR_HIVEMQ_PASSWORD"
+MQTT_PASSWORD = "Ha00102030meD@"
 
 # فعلاً همان Topic فعلی
 # بعداً می‌توانیم دما را به Topic جدا منتقل کنیم.
