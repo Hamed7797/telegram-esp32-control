@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 # TELEGRAM
 # =========================================================
 
-TELEGRAM_BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+TELEGRAM_BOT_TOKEN = (
+    "8814366440:AAH_KHZ2jkce9AyIISaKq0OJ9Wk2oY6aRXU"
 
 # 0 = همه کاربران مجاز
 ALLOWED_CHAT_ID = "0"
@@ -56,16 +57,11 @@ ALLOWED_CHAT_ID = "0"
 # HIVEMQ
 # =========================================================
 
-MQTT_HOST = (
-    "c8f63357997a47a8b37f0495aac24c7d"
-    ".s1.eu.hivemq.cloud"
-)
-
+MQTT_HOST = "c8f63357997a47a8b37f0495aac24c7d.s1.eu.hivemq.cloud"
 MQTT_PORT = 8883
 
 MQTT_USERNAME = "hamed_esp32"
-
-MQTT_PASSWORD = "PUT_YOUR_MQTT_PASSWORD_HERE"
+MQTT_PASSWORD = "Ha00102030meD@"
 
 
 # =========================================================
